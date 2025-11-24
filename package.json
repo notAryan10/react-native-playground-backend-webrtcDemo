@@ -1,0 +1,46 @@
+{
+  "name": "react_native_playground_backend",
+  "version": "1.0.0",
+  "description": "React Native Playground Backend",
+  "main": "server.ts",
+  "scripts": {
+    "start": "node server.ts",
+    "dev": "nodemon server.ts",
+    "start:webrtc": "ts-node server.webrtc.ts",
+    "dev:webrtc": "nodemon --exec ts-node server.webrtc.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QUBITABHAY/react_native_playground_backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/QUBITABHAY/react_native_playground_backend/issues"
+  },
+  "homepage": "https://github.com/QUBITABHAY/react_native_playground_backend#readme",
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.5",
+    "@types/node": "^24.10.0",
+    "@types/ws": "^8.5.13",
+    "nodemon": "^3.1.11",
+    "prisma": "^6.19.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.2",
+    "cors": "^2.8.5",
+    "expo-status-bar": "^3.0.8",
+    "express": "^5.1.0",
+    "react-dom": "^19.2.0",
+    "react-native-view-shot": "^4.0.3",
+    "react-native-web": "^0.21.2",
+    "react-native-webrtc": "^124.0.7",
+    "ws": "^8.18.3",
+    "zod": "^4.1.11"
+  }
+}
