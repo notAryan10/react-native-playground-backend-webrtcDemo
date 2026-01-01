@@ -1,6 +1,10 @@
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import cors from "cors";
+import { transform } from "sucrase";
+import * as pty from 'node-pty';
+import * as os from 'os';
+import * as http from 'http';
 
 const app = express();
 const HTTP_PORT = 3000;
@@ -9,7 +13,8 @@ const WS_SIGNALING_PORT = 3002;
 app.use(cors());
 app.use(express.json());
 
-// WebRTC Signaling Server
+const terminalWss = new WebSocketServer({ noServer: true });
+
 let signalingWss: WebSocketServer;
 try {
   signalingWss = new WebSocketServer({ port: WS_SIGNALING_PORT });
@@ -23,7 +28,6 @@ try {
   throw error;
 }
 
-// Store connected clients
 interface Client {
   ws: WebSocket;
   id: string;
@@ -36,7 +40,6 @@ signalingWss.on("connection", (ws: WebSocket, req) => {
   const clientId = `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   console.log(`WebRTC signaling client connected: ${clientId}`);
 
-  // Send client ID to the newly connected client
   ws.send(JSON.stringify({
     type: 'client-id',
     clientId: clientId
@@ -48,15 +51,13 @@ signalingWss.on("connection", (ws: WebSocket, req) => {
 
       switch (data.type) {
         case 'register':
-          // Register client type (mobile or web)
           clients.set(clientId, {
             ws,
             id: clientId,
             type: data.clientType || 'web'
           });
           console.log(`Client ${clientId} registered as ${data.clientType || 'web'}`);
-          
-          // Notify all clients about new connection
+
           broadcastToOthers(clientId, {
             type: 'client-connected',
             clientId: clientId,
@@ -65,7 +66,6 @@ signalingWss.on("connection", (ws: WebSocket, req) => {
           break;
 
         case 'offer':
-          // Forward offer to the other peer
           console.log(`Offer from ${clientId} to ${data.targetId || 'all'}`);
           if (data.targetId) {
             sendToClient(data.targetId, {
@@ -74,7 +74,6 @@ signalingWss.on("connection", (ws: WebSocket, req) => {
               fromId: clientId
             });
           } else {
-            // Broadcast to all other clients
             broadcastToOthers(clientId, {
               type: 'offer',
               offer: data.offer,
@@ -84,7 +83,6 @@ signalingWss.on("connection", (ws: WebSocket, req) => {
           break;
 
         case 'answer':
-          // Forward answer to the peer that sent the offer
           console.log(`Answer from ${clientId} to ${data.targetId}`);
           if (data.targetId) {
             sendToClient(data.targetId, {
@@ -96,7 +94,6 @@ signalingWss.on("connection", (ws: WebSocket, req) => {
           break;
 
         case 'ice-candidate':
-          // Forward ICE candidate to the other peer
           if (data.targetId) {
             sendToClient(data.targetId, {
               type: 'ice-candidate',
@@ -104,7 +101,6 @@ signalingWss.on("connection", (ws: WebSocket, req) => {
               fromId: clientId
             });
           } else {
-            // Broadcast to all other clients
             broadcastToOthers(clientId, {
               type: 'ice-candidate',
               candidate: data.candidate,
@@ -113,8 +109,33 @@ signalingWss.on("connection", (ws: WebSocket, req) => {
           }
           break;
 
+        case 'code-update':
+          console.log(`Code update from ${clientId}`);
+          let transpiledCode = data.code;
+          try {
+            const result = transform(data.code, {
+              transforms: ["jsx", "typescript", "imports"],
+              production: true,
+            });
+            transpiledCode = result.code;
+            console.log('✅ Code transpiled successfully');
+          } catch (err: any) {
+            console.error("❌ Transpilation error:", err.message);
+          }
+
+          clients.forEach((client, id) => {
+            if (id !== clientId && client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
+              client.ws.send(JSON.stringify({
+                type: 'code-update',
+                code: transpiledCode,
+                originalCode: data.code,
+                fromId: clientId
+              }));
+            }
+          });
+          break;
+
         case 'get-clients':
-          // Send list of connected clients
           const clientList = Array.from(clients.values())
             .filter(c => c.id !== clientId)
             .map(c => ({ id: c.id, type: c.type }));
@@ -135,8 +156,6 @@ signalingWss.on("connection", (ws: WebSocket, req) => {
   ws.on("close", () => {
     console.log(`WebRTC signaling client disconnected: ${clientId}`);
     clients.delete(clientId);
-    
-    // Notify other clients about disconnection
     broadcastToOthers(clientId, {
       type: 'client-disconnected',
       clientId: clientId
@@ -165,7 +184,6 @@ function broadcastToOthers(senderId: string, message: any) {
   });
 }
 
-// HTTP endpoints
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
@@ -200,9 +218,73 @@ app.get("/clients", (req, res) => {
   });
 });
 
-app.listen(HTTP_PORT, () => {
+terminalWss.on('connection', (ws: WebSocket) => {
+  console.log('🖥️  Terminal client connected');
+
+  const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
+  const ptyProcess = pty.spawn(shell, [], {
+    name: 'xterm-color',
+    cols: 80,
+    rows: 30,
+    cwd: process.cwd(),
+    env: process.env as any,
+  });
+
+  ptyProcess.onData((data: string) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    }
+  });
+
+  ws.on('message', (message: Buffer) => {
+    try {
+      const data = JSON.parse(message.toString());
+
+      switch (data.type) {
+        case 'input':
+          ptyProcess.write(data.data);
+          break;
+
+        case 'resize':
+          ptyProcess.resize(data.cols || 80, data.rows || 30);
+          break;
+      }
+    } catch (error) {
+      console.error('Terminal message error:', error);
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('🖥️  Terminal client disconnected');
+    ptyProcess.kill();
+  });
+
+  ptyProcess.onExit(({ exitCode }) => {
+    console.log(`Terminal process exited with code ${exitCode}`);
+    ws.close();
+  });
+});
+
+const httpServer = http.createServer();
+
+httpServer.on('request', app);
+
+httpServer.on('upgrade', (request, socket, head) => {
+  const url = new URL(request.url!, `http://${request.headers.host}`);
+
+  if (url.pathname === '/terminal') {
+    terminalWss.handleUpgrade(request, socket, head, (ws) => {
+      terminalWss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+httpServer.listen(HTTP_PORT, () => {
   console.log(`HTTP server listening on http://0.0.0.0:${HTTP_PORT}`);
   console.log(`WebRTC signaling available at ws://0.0.0.0:${WS_SIGNALING_PORT}`);
+  console.log(`Terminal WebSocket available at ws://0.0.0.0:${HTTP_PORT}/terminal`);
   console.log(`\n✅ Server is ready!`);
   console.log(`\nTo use WebRTC:`);
   console.log(`1. Connect mobile app to ws://YOUR_IP:${WS_SIGNALING_PORT}`);
@@ -214,6 +296,16 @@ app.listen(HTTP_PORT, () => {
     process.exit(1);
   }
   throw error;
+});
+
+httpServer.on('upgrade', (request, socket, head) => {
+  const url = new URL(request.url!, `http://${request.headers.host}`);
+
+  if (url.pathname === '/terminal') {
+    terminalWss.handleUpgrade(request, socket, head, (ws) => {
+      terminalWss.emit('connection', ws, request);
+    });
+  }
 });
 
 process.on("SIGINT", () => {

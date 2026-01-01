@@ -1,0 +1,31 @@
+{
+  "name": "webrtc-mobile",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@config-plugins/react-native-webrtc": "^13.0.0",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "expo": "~52.0.0",
+    "expo-asset": "~11.0.5",
+    "expo-constants": "~17.0.8",
+    "expo-dev-client": "~5.0.20",
+    "expo-status-bar": "~2.0.0",
+    "metro": "^0.81.0",
+    "metro-config": "0.80.12",
+    "metro-runtime": "0.80.12",
+    "react": "18.3.1",
+    "react-native": "0.76.9",
+    "react-native-webrtc": "^124.0.7"
+  },
+  "devDependencies": {
+    "@types/react": "~18.3.12",
+    "typescript": "~5.9.2"
+  },
+  "private": true
+}

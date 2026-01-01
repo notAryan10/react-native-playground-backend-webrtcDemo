@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <h2>WebRTC Viewer</h2>
+  <video id="video" autoplay playsinline></video>
+
+  <script>
+    const ws = new WebSocket('ws://10.229.4.190:3002');
+    const pc = new RTCPeerConnection();
+
+    pc.ontrack = e => {
+      document.getElementById('video').srcObject = e.streams[0];
+    };
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'register', clientType: 'web' }));
+    };
+
+    ws.onmessage = async e => {
+      const d = JSON.parse(e.data);
+
+      if (d.type === 'offer') {
+        await pc.setRemoteDescription(d.offer);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: 'answer', answer }));
+      }
+
+      if (d.type === 'ice-candidate') {
+        pc.addIceCandidate(d.candidate);
+      }
+    };
+
+    pc.onicecandidate = e => {
+      if (e.candidate) {
+        ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate }));
+      }
+    };
+  </script>
+</body>
+</html>
