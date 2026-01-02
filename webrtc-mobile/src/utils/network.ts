@@ -1,10 +1,13 @@
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
-const DEV_MACHINE_IP = '10.229.4.190';
-
 export function getWsUrl(port: number) {
-  if (Platform.OS === 'android') {
-    return `ws://${DEV_MACHINE_IP}:${port}`;
+  const debuggerHost = Constants.expoConfig?.hostUri;
+
+  if (debuggerHost) {
+    const host = debuggerHost.split(':')[0];
+    return `ws://${host}:${port}`;
   }
+
   return `ws://localhost:${port}`;
 }

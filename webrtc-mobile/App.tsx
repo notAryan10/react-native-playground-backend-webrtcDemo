@@ -5,7 +5,9 @@ import {
 } from 'react-native-webrtc';
 import CodeRunner from './src/CodeRunner';
 
-const SIGNALING_URL = 'ws://localhost:3002'
+import { getWsUrl } from './src/utils/network';
+
+const SIGNALING_URL = getWsUrl(3002);
 
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
