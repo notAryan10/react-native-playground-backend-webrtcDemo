@@ -1,222 +1,222 @@
 import express from "express";
-import { WebSocketServer } from "ws";
-import { spawn, ChildProcess } from "child_process";
+import { WebSocketServer, WebSocket } from "ws";
 import cors from "cors";
-import { IncomingMessage, ServerResponse } from "http";
+import { transform } from "sucrase";
 import * as pty from 'node-pty';
+import * as os from 'os';
+import * as http from 'http';
 
 const app = express();
 const HTTP_PORT = 3000;
-const WS_PORT = 3001;
+const WS_SIGNALING_PORT = 3002;
+
 app.use(cors());
 app.use(express.json());
 
-app.get('/status', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-const terminalWss = new WebSocketServer({ noServer: true });
-
-terminalWss.on('connection', (ws) => {
-  console.log('Terminal client connected');
-  const shell = process.env.SHELL || 'bash';
-  
-  const ptyProcess = pty.spawn(shell, [], {
-    name: 'xterm-color',
-    cols: 80,
-    rows: 30,
-    cwd: process.env.HOME,
-    env: process.env as any
-  });
-
-  ptyProcess.onData((data) => {
-    if (ws.readyState === ws.OPEN) {
-      ws.send(data);
-    }
-  });
-
-  ws.on('message', (msg) => {
-    try {
-      const message = JSON.parse(msg.toString());
-      if (message.type === 'input') {
-        ptyProcess.write(message.data);
-      } else if (message.type === 'resize') {
-        ptyProcess.resize(message.cols, message.rows);
-      }
-    } catch (e) {
-      console.error('Error parsing terminal message:', e);
-    }
-  });
-
-  ws.on('close', () => {
-    console.log('Terminal client disconnected');
-    ptyProcess.kill();
-  });
-});
-
-const wss = new WebSocketServer({ 
-  port: WS_PORT,
-  host: '0.0.0.0' 
-});
-console.log(`WebSocket server listening on ws://0.0.0.0:${WS_PORT}`);
-
-let ffmpeg: ChildProcess | null = null;
-let httpClients: ServerResponse[] = [];
-
-function startFFmpeg() {
-  if (ffmpeg) return;
-  
-  console.log("Starting ffmpeg process...");
-  
-  ffmpeg = spawn("ffmpeg", [
-    "-f", "image2pipe",       
-    "-r", "10",               
-    "-i", "pipe:0",           
-    "-vf", "scale=640:-2",     
-    "-q:v", "5",              
-    "-f", "mjpeg",          
-    "pipe:1"                
-  ], { stdio: ["pipe", "pipe", "inherit"] });
-  ffmpeg.stdout?.on("data", (chunk: Buffer) => {
-    // console.log(`ffmpeg output: ${chunk.length} bytes to ${httpClients.length} clients`);
-    httpClients.forEach(res => {
-      try {
-        res.write(chunk);
-      } catch (e) {
-        console.error("Error writing to client:", e);
-      }
-    });
-  });
-
-  ffmpeg.on("exit", (code) => {
-    console.log(`ffmpeg exited with code ${code}`);
-    ffmpeg = null;
-  });
-
-  ffmpeg.on("error", (err) => {
-    console.error("ffmpeg error:", err);
-    ffmpeg = null;
-  });
-
-  console.log("ffmpeg started successfully");
+let signalingWss: WebSocketServer;
+try {
+  signalingWss = new WebSocketServer({ port: WS_SIGNALING_PORT });
+  console.log(`WebRTC Signaling server listening on ws://0.0.0.0:${WS_SIGNALING_PORT}`);
+} catch (error: any) {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${WS_SIGNALING_PORT} is already in use.`);
+    process.exit(1);
+  }
+  throw error;
 }
 
-function stopFFmpeg() {
-  if (ffmpeg) {
-    console.log("Stopping ffmpeg...");
-    try {
-      if (ffmpeg.stdin && !ffmpeg.stdin.destroyed) {
-        ffmpeg.stdin.end();
-      }
-      ffmpeg.kill('SIGTERM');
-    } catch (err: any) {
-      console.log("Error stopping ffmpeg (this is normal):", err?.message || err);
-    }
-    ffmpeg = null;
+interface Client {
+  ws: WebSocket;
+  id: string;
+  type: 'mobile' | 'web';
+}
+
+const clients: Map<string, Client> = new Map();
+
+function sendToClient(clientId: string, message: any) {
+  const client = clients.get(clientId);
+  if (client && client.ws.readyState === WebSocket.OPEN) {
+    client.ws.send(JSON.stringify(message));
   }
 }
 
-wss.on("connection", (ws) => {
-  console.log("Mobile client connected via WebSocket");
+function broadcastToOthers(senderId: string, message: any) {
+  clients.forEach((client, id) => {
+    if (id !== senderId && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(JSON.stringify(message));
+    }
+  });
+}
 
-  ws.on("message", (msg: Buffer) => {
+signalingWss.on("connection", (ws: WebSocket) => {
+  const clientId = `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  console.log(`WebRTC signaling client connected: ${clientId}`);
+
+  ws.send(JSON.stringify({ type: 'client-id', clientId: clientId }));
+
+  ws.on("message", (message: Buffer) => {
     try {
-      const msgStr = msg.toString();
-      const data = JSON.parse(msgStr);
+      const data = JSON.parse(message.toString());
 
-      if (data.type === "frame" && data.data) {
-        if (!ffmpeg) {
-          startFFmpeg();
-        }
-        const buffer = Buffer.from(data.data, "base64");
-        // console.log(`Received frame: ${buffer.length} bytes`);
-        
-        if (ffmpeg && ffmpeg.stdin && ffmpeg.stdin.writable && !ffmpeg.stdin.destroyed) {
+      switch (data.type) {
+        case 'register':
+          clients.set(clientId, { ws, id: clientId, type: data.clientType || 'web' });
+          console.log(`Client ${clientId} registered as ${data.clientType || 'web'}`);
+          broadcastToOthers(clientId, { type: 'client-connected', clientId, clientType: data.clientType || 'web' });
+          break;
+
+        case 'offer':
+          if (data.targetId) sendToClient(data.targetId, { type: 'offer', offer: data.offer, fromId: clientId });
+          else broadcastToOthers(clientId, { type: 'offer', offer: data.offer, fromId: clientId });
+          break;
+
+        case 'answer':
+          if (data.targetId) sendToClient(data.targetId, { type: 'answer', answer: data.answer, fromId: clientId });
+          break;
+
+        case 'ice-candidate':
+          if (data.targetId) sendToClient(data.targetId, { type: 'ice-candidate', candidate: data.candidate, fromId: clientId });
+          else broadcastToOthers(clientId, { type: 'ice-candidate', candidate: data.candidate, fromId: clientId });
+          break;
+
+        case 'code-update':
+          console.log(`Code update from ${clientId}`);
+          let transpiledCode = data.code;
           try {
-            ffmpeg.stdin.write(buffer, (err) => {
-              if (err) {
-                console.error("Error writing to ffmpeg:", err.message);
-              }
-            });
+            const result = transform(data.code, { transforms: ["jsx", "typescript", "imports"], production: true });
+            transpiledCode = result.code;
+            console.log('✅ Code transpiled');
           } catch (err: any) {
-            console.error("Error writing frame to ffmpeg:", err?.message || err);
+            console.error("❌ Transpilation error:", err.message);
           }
-        } else {
-          console.log("Cannot write to ffmpeg - stdin not available");
-        }
-      } else if (data.type === "stop") {
-        console.log("Stop signal received from client");
-        stopFFmpeg();
+          clients.forEach((client, id) => {
+            if (id !== clientId && client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
+              client.ws.send(JSON.stringify({ type: 'code-update', code: transpiledCode, originalCode: data.code, fromId: clientId }));
+            }
+          });
+          break;
+
+        case 'get-clients':
+          const clientList = Array.from(clients.values()).filter(c => c.id !== clientId).map(c => ({ id: c.id, type: c.type }));
+          ws.send(JSON.stringify({ type: 'clients-list', clients: clientList }));
+          break;
       }
-    } catch (e) {
-      console.error("Error processing WebSocket message:", e);
+    } catch (error) {
+      console.error("Error processing message:", error);
     }
   });
 
   ws.on("close", () => {
-    console.log("Mobile client disconnected");
-  });
-
-  ws.on("error", (err) => {
-    console.error("WebSocket error:", err);
+    console.log(`Client disconnected: ${clientId}`);
+    clients.delete(clientId);
+    broadcastToOthers(clientId, { type: 'client-disconnected', clientId });
   });
 });
-app.get("/stream.mjpeg", (req: IncomingMessage, res: ServerResponse) => {
-  console.log("HTTP client connected to stream");
-  
-  res.writeHead(200, {
-    "Content-Type": "multipart/x-mixed-replace; boundary=ffserver",
-    "Cache-Control": "no-cache, no-store, must-revalidate",
-    "Pragma": "no-cache",
-    "Expires": "0",
-    "Connection": "close",
-    "Access-Control-Allow-Origin": "*"
+
+
+const terminalWss = new WebSocketServer({ noServer: true });
+
+terminalWss.on("connection", (ws: WebSocket) => {
+  console.log("🖥️  Terminal connected");
+
+  const shell = process.env.SHELL || (os.platform() === "win32" ? "powershell.exe" : "/bin/bash");
+
+  let ptyProcess: any;
+  try {
+    ptyProcess = pty.spawn(shell, [], {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd: process.cwd(),
+      env: process.env as any,
+    });
+  } catch (err: any) {
+    console.error("❌ Failed to spawn pty:", err);
+    ws.send(`\r\n\x1b[31mError spawning terminal: ${err.message}\x1b[0m\r\n`);
+    ws.close();
+    return;
+  }
+
+  ptyProcess.onData((data: string) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    }
   });
 
-  httpClients.push(res);
+  ws.on("message", (msg: Buffer) => {
+    try {
+      const parsed = JSON.parse(msg.toString());
+      const { type, data, cols, rows } = parsed;
 
-  req.on("close", () => {
-    console.log("HTTP client disconnected from stream");
-    httpClients = httpClients.filter(r => r !== res);
+      if (type === "input") {
+        ptyProcess.write(data);
+      }
+
+      if (type === "resize") {
+        ptyProcess.resize(cols, rows);
+      }
+    } catch (e) {
+      console.error("Terminal msg error:", e);
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("🖥️  Terminal disconnected");
+    try {
+      ptyProcess.kill();
+    } catch (e) { }
   });
 });
+
+
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
-    message: "React Native Playground Backend",
-    streaming: ffmpeg !== null,
-    connectedClients: httpClients.length
+    message: "React Native Playground Backend - WebRTC Mode",
+    signalingPort: WS_SIGNALING_PORT,
+    connectedClients: clients.size
   });
 });
 
 app.get("/status", (req, res) => {
   res.json({
-    ffmpegRunning: ffmpeg !== null,
-    httpClients: httpClients.length,
-    wsConnections: wss.clients.size
+    signalingActive: true,
+    connectedClients: clients.size,
+    clients: Array.from(clients.values()).map(c => ({ id: c.id, type: c.type }))
   });
 });
-const server = app.listen(HTTP_PORT, '0.0.0.0', () => {
-  console.log(`HTTP server listening on http://0.0.0.0:${HTTP_PORT}`);
-  console.log(`MJPEG stream available at http://0.0.0.0:${HTTP_PORT}/stream.mjpeg`);
-  console.log(`\n✅ Server ready! Connect from phone using: http://10.254.203.23:${HTTP_PORT}`);
-});
 
-server.on('upgrade', (request, socket, head) => {
-  const pathname = request.url ? new URL(request.url, `http://${request.headers.host}`).pathname : '';
+const httpServer = http.createServer(app);
 
-  if (pathname === '/terminal') {
-    terminalWss.handleUpgrade(request, socket, head, (ws) => {
-      terminalWss.emit('connection', ws, request);
+httpServer.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url!, `http://${req.headers.host}`);
+
+  if (url.pathname === "/terminal") {
+    terminalWss.handleUpgrade(req, socket, head, (ws) => {
+      terminalWss.emit("connection", ws, req);
     });
   } else {
     socket.destroy();
   }
 });
 
+httpServer.listen(HTTP_PORT, () => {
+  console.log(`✅ Server is ready!`);
+  console.log(`HTTP server listening on http://0.0.0.0:${HTTP_PORT}`);
+  console.log(`WebRTC signaling available at ws://0.0.0.0:${WS_SIGNALING_PORT}`);
+  console.log(`Terminal WebSocket available at ws://0.0.0.0:${HTTP_PORT}/terminal`);
+});
+
+httpServer.on('error', (error: any) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${HTTP_PORT} is already in use.`);
+    process.exit(1);
+  }
+  throw error;
+});
+
 process.on("SIGINT", () => {
-  console.log("\nShutting down gracefully...");
-  stopFFmpeg();
-  wss.close();
+  signalingWss.close();
+  terminalWss.close();
   process.exit(0);
 });

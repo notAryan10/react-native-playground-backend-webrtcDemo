@@ -4,10 +4,8 @@
   "description": "React Native Playground Backend",
   "main": "server.ts",
   "scripts": {
-    "start": "node server.ts",
-    "dev": "nodemon server.ts",
-    "start:webrtc": "ts-node server.webrtc.ts",
-    "dev:webrtc": "nodemon --exec ts-node server.webrtc.ts"
+    "start": "ts-node server.ts",
+    "dev": "nodemon --exec ts-node server.ts"
   },
   "repository": {
     "type": "git",
