@@ -7,23 +7,13 @@ import * as os from 'os';
 import * as http from 'http';
 
 const app = express();
-const HTTP_PORT = 3000;
-const WS_SIGNALING_PORT = 3002;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-let signalingWss: WebSocketServer;
-try {
-  signalingWss = new WebSocketServer({ port: WS_SIGNALING_PORT });
-  console.log(`WebRTC Signaling server listening on ws://0.0.0.0:${WS_SIGNALING_PORT}`);
-} catch (error: any) {
-  if (error.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${WS_SIGNALING_PORT} is already in use.`);
-    process.exit(1);
-  }
-  throw error;
-}
+const signalingWss = new WebSocketServer({ noServer: true });
+const terminalWss = new WebSocketServer({ noServer: true });
 
 interface Client {
   ws: WebSocket;
@@ -113,9 +103,6 @@ signalingWss.on("connection", (ws: WebSocket) => {
   });
 });
 
-
-const terminalWss = new WebSocketServer({ noServer: true });
-
 terminalWss.on("connection", (ws: WebSocket) => {
   console.log("🖥️  Terminal connected");
 
@@ -168,12 +155,11 @@ terminalWss.on("connection", (ws: WebSocket) => {
   });
 });
 
-
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
     message: "React Native Playground Backend - WebRTC Mode",
-    signalingPort: WS_SIGNALING_PORT,
+    port: PORT,
     connectedClients: clients.size
   });
 });
@@ -196,23 +182,17 @@ httpServer.on("upgrade", (req, socket, head) => {
       terminalWss.emit("connection", ws, req);
     });
   } else {
-    socket.destroy();
+    // Default to signaling for other paths (likely root or specified signaling path)
+    signalingWss.handleUpgrade(req, socket, head, (ws) => {
+      signalingWss.emit("connection", ws, req);
+    });
   }
 });
 
-httpServer.listen(HTTP_PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`✅ Server is ready!`);
-  console.log(`HTTP server listening on http://0.0.0.0:${HTTP_PORT}`);
-  console.log(`WebRTC signaling available at ws://0.0.0.0:${WS_SIGNALING_PORT}`);
-  console.log(`Terminal WebSocket available at ws://0.0.0.0:${HTTP_PORT}/terminal`);
-});
-
-httpServer.on('error', (error: any) => {
-  if (error.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${HTTP_PORT} is already in use.`);
-    process.exit(1);
-  }
-  throw error;
+  console.log(`Listening on port ${PORT}`);
+  console.log(`WebRTC signaling and Terminal available on same port`);
 });
 
 process.on("SIGINT", () => {

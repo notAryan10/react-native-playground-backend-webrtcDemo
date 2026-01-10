@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, FlatList, Image, TextInput, Button } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import * as ReactNative from 'react-native';
 
 interface CodeRunnerProps {
