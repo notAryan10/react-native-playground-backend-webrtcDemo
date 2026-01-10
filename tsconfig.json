@@ -12,6 +12,13 @@
     "rootDir": "./",
     "allowSyntheticDefaultImports": true
   },
-  "include": ["**/*.ts", "test-frame.mjs"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "**/*.ts",
+    "test-frame.mjs"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "webrtc-mobile"
+  ]
 }
