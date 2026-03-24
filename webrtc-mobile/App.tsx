@@ -48,7 +48,8 @@ export default function App() {
         };
 
         try {
-          const stream = await mediaDevices.getDisplayMedia();
+          // @ts-ignore
+          const stream = await mediaDevices.getDisplayMedia({ video: true });
           stream.getTracks().forEach((track) => {
             pc.addTrack(track, stream);
           });
