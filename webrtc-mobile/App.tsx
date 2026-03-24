@@ -61,7 +61,7 @@ export default function App() {
         const msg = JSON.parse(event.data);
 
         if (msg.type === 'answer') {
-          console.log('📩 Answer received');
+          console.log('Answer received');
           await pcRef.current?.setRemoteDescription(msg.answer);
           setStatus('connected');
         }
@@ -77,8 +77,8 @@ export default function App() {
 
         if (msg.type === 'bundle') {
           console.log(`📦 Bundle received: ${msg.name}`);
-          (global as any).DynamicModules = (global as any).DynamicModules || {};
-          (global as any).DynamicModules[msg.name] = msg.code;
+          (globalThis as any).DynamicModules = (globalThis as any).DynamicModules || {};
+          (globalThis as any).DynamicModules[msg.name] = msg.code;
         }
       };
 

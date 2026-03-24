@@ -72,25 +72,29 @@ export default function CodeRunner({ code }: CodeRunnerProps) {
     useEffect(() => {
         if (!code) return;
 
-        try {
-            const exports: any = {};
-            const module: any = { exports };
+        const timeoutId = setTimeout(() => {
+            try {
+                const exports: any = {};
+                const module: any = { exports };
 
-            const func = new Function('require', 'exports', 'module', code);
-            func(requireModule, exports, module);
-            const ExportedComponent = module.exports.default || module.exports;
+                const func = new Function('require', 'exports', 'module', code);
+                func(requireModule, exports, module);
+                const ExportedComponent = module.exports.default || module.exports;
 
-            if (typeof ExportedComponent === 'function') {
-                setComponent(() => ExportedComponent);
-                setError(null);
-            } else {
-                setError("No default export found. Make sure to 'export default function App() { ... }'");
+                if (typeof ExportedComponent === 'function') {
+                    setComponent(() => ExportedComponent);
+                    setError(null);
+                } else {
+                    setError("No default export found. Make sure to 'export default function App() { ... }'");
+                }
+
+            } catch (e: any) {
+                console.error("Eval error:", e);
+                setError(e.message);
             }
+        }, 800);
 
-        } catch (e: any) {
-            console.error("Eval error:", e);
-            setError(e.message);
-        }
+        return () => clearTimeout(timeoutId);
     }, [code]);
 
     if (error) {

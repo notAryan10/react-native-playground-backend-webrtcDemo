@@ -182,7 +182,6 @@ httpServer.on("upgrade", (req, socket, head) => {
       terminalWss.emit("connection", ws, req);
     });
   } else {
-    // Default to signaling for other paths (likely root or specified signaling path)
     signalingWss.handleUpgrade(req, socket, head, (ws) => {
       signalingWss.emit("connection", ws, req);
     });
