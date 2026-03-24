@@ -62,6 +62,7 @@ signalingWss.on("connection", (ws: WebSocket) => {
 
         case 'answer':
           if (data.targetId) sendToClient(data.targetId, { type: 'answer', answer: data.answer, fromId: clientId });
+          else broadcastToOthers(clientId, { type: 'answer', answer: data.answer, fromId: clientId });
           break;
 
         case 'ice-candidate':

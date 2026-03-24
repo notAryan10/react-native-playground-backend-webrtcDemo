@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { View, Text, Button, StyleSheet } from 'react-native';
 import {
   RTCPeerConnection,
+  mediaDevices,
 } from 'react-native-webrtc';
 import CodeRunner from './src/CodeRunner';
 
@@ -45,6 +46,16 @@ export default function App() {
             }));
           }
         };
+
+        try {
+          const stream = await mediaDevices.getDisplayMedia();
+          stream.getTracks().forEach((track) => {
+            pc.addTrack(track, stream);
+          });
+          console.log('📹 Screen stream added to PeerConnection');
+        } catch (mediaErr) {
+          console.error('Failed to get display media:', mediaErr);
+        }
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
