@@ -8,6 +8,16 @@ import CodeRunner from './src/CodeRunner';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import Constants from 'expo-constants';
+
+const getAutoUrl = () => {
+  const debuggerHost = Constants.expoConfig?.hostUri;
+  if (debuggerHost) {
+    const host = debuggerHost.split(':')[0];
+    return `http://${host}:4000`; // Orchestrator usually runs on 4000
+  }
+  return 'http://localhost:4000';
+};
 
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -15,7 +25,7 @@ export default function App() {
   const [status, setStatus] = useState('idle');
   const [currentCode, setCurrentCode] = useState<string>('');
   const [userId, setUserId] = useState('');
-  const [orchestratorUrl, setOrchestratorUrl] = useState('');
+  const [orchestratorUrl, setOrchestratorUrl] = useState(getAutoUrl());
   const [isProvisioning, setIsProvisioning] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
