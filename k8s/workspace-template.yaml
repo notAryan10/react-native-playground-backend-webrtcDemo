@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: workspace-pvc-{{userId}}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: workspace-pod-{{userId}}
+  labels:
+    app: workspace
+    user: "{{userId}}"
+spec:
+  containers:
+    - name: backend
+      image: rn-playground-backend:latest
+      ports:
+        - containerPort: 3000
+      env:
+        - name: WORKSPACE_DIR
+          value: /workspace
+      volumeMounts:
+        - name: workspace-storage
+          mountPath: /workspace
+  volumes:
+    - name: workspace-storage
+      persistentVolumeClaim:
+        claimName: workspace-pvc-{{userId}}
+  restartPolicy: Never
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: workspace-svc-{{userId}}
+spec:
+  selector:
+    app: workspace
+    user: "{{userId}}"
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+  type: ClusterIP

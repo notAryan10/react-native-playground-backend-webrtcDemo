@@ -8,6 +8,21 @@ import * as http from 'http';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const WORKSPACE_DIR = process.env.WORKSPACE_DIR || (os.platform() === 'win32' ? process.cwd() : '/workspace');
+const INACTIVITY_TIMEOUT = 60 * 60 * 1000; // 1 hour
+
+let inactivityTimer: NodeJS.Timeout;
+
+function resetInactivityTimer() {
+  clearTimeout(inactivityTimer);
+  inactivityTimer = setTimeout(() => {
+    console.log("Shutting down due to inactivity...");
+    process.exit(0);
+  }, INACTIVITY_TIMEOUT);
+}
+
+// Initial timer start
+resetInactivityTimer();
 
 app.use(cors());
 app.use(express.json());
@@ -45,6 +60,7 @@ signalingWss.on("connection", (ws: WebSocket) => {
   ws.send(JSON.stringify({ type: 'client-id', clientId: clientId }));
 
   ws.on("message", (message: Buffer) => {
+    resetInactivityTimer();
     try {
       const data = JSON.parse(message.toString());
 
@@ -115,7 +131,7 @@ terminalWss.on("connection", (ws: WebSocket) => {
       name: "xterm-256color",
       cols: 80,
       rows: 24,
-      cwd: process.cwd(),
+      cwd: WORKSPACE_DIR,
       env: process.env as any,
     });
   } catch (err: any) {
@@ -132,6 +148,7 @@ terminalWss.on("connection", (ws: WebSocket) => {
   });
 
   ws.on("message", (msg: Buffer) => {
+    resetInactivityTimer();
     try {
       const parsed = JSON.parse(msg.toString());
       const { type, data, cols, rows } = parsed;
@@ -189,9 +206,9 @@ httpServer.on("upgrade", (req, socket, head) => {
   }
 });
 
-httpServer.listen(PORT, () => {
+httpServer.listen(Number(PORT), "0.0.0.0", () => {
   console.log(`✅ Server is ready!`);
-  console.log(`Listening on port ${PORT}`);
+  console.log(`Listening on port ${PORT} at 0.0.0.0`);
   console.log(`WebRTC signaling and Terminal available on same port`);
 });
 
