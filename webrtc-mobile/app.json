@@ -16,7 +16,10 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.notaryan.webrtcmobile",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "This app uses the microphone for WebRTC communication."
+        "NSMicrophoneUsageDescription": "This app uses the microphone for WebRTC communication.",
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       },
       "bitcode": false
     },
@@ -37,6 +40,7 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "usesCleartextTraffic": true,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },

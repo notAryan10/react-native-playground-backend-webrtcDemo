@@ -6,7 +6,8 @@ import {
 } from 'react-native-webrtc';
 import CodeRunner from './src/CodeRunner';
 
-const ORCHESTRATOR_URL = 'http://103.173.195.247:4000';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -14,47 +15,64 @@ export default function App() {
   const [status, setStatus] = useState('idle');
   const [currentCode, setCurrentCode] = useState<string>('');
   const [userId, setUserId] = useState('');
+  const [orchestratorUrl, setOrchestratorUrl] = useState('');
   const [isProvisioning, setIsProvisioning] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
 
-  const start = async () => {
-    if (!userId) {
-      alert('Please enter your Workspace ID (found in web dashboard)');
-      return;
-    }
+  useEffect(() => {
+    const loadSettings = async () => {
+      const savedUrl = await AsyncStorage.getItem('orchestrator-url');
+      const savedUser = await AsyncStorage.getItem('user-id');
+      if (savedUrl) setOrchestratorUrl(savedUrl);
+      if (savedUser) setUserId(savedUser);
+    };
+    loadSettings();
+  }, []);
 
+  const handleBarCodeScanned = ({ data }: { data: string }) => {
     try {
+      const config = JSON.parse(data);
+      if (config.url && config.id) {
+        setOrchestratorUrl(config.url);
+        setUserId(config.id);
+        setShowScanner(false);
+        // Start connection automatically after scan
+        setTimeout(() => startConnection(config.url, config.id), 500);
+      }
+    } catch (e) {
+      console.error('Invalid QR code:', e);
+    }
+  };
+
+  const startConnection = async (url: string, id: string) => {
+    try {
+      await AsyncStorage.setItem('orchestrator-url', url);
+      await AsyncStorage.setItem('user-id', id);
+
       setStatus('connecting');
       setIsProvisioning(true);
-      console.log('▶️ Requesting workspace for:', userId);
-
-      // 1. Get dynamic workspace URL from Orchestrator
-      const res = await fetch(`${ORCHESTRATOR_URL}/workspaces`, {
+      
+      const cleanUrl = url.endsWith('/') ? url.slice(0, -1) : url;
+      
+      const res = await fetch(`${cleanUrl}/workspaces`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId })
+        body: JSON.stringify({ userId: id })
       });
       const data = await res.json();
       
-      if (data.status !== 'ready') {
-        throw new Error('Workspace not ready');
-      }
+      if (data.status !== 'ready') throw new Error('Workspace not ready');
 
       const SIGNALING_URL = data.url;
-      console.log('✅ Workspace assigned:', SIGNALING_URL);
       setIsProvisioning(false);
 
-      // 2. Connect to the dynamic WebSocket
       const ws = new WebSocket(SIGNALING_URL);
       wsRef.current = ws;
 
       ws.onopen = async () => {
-        console.log('✅ WS connected');
-        setStatus('ws-connected');
-
-        ws.send(JSON.stringify({
-          type: 'register',
-          clientType: 'mobile',
-        }));
+        setStatus('connected');
+        ws.send(JSON.stringify({ type: 'register', clientType: 'mobile' }));
 
         const pc = new RTCPeerConnection({
           iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
@@ -62,64 +80,64 @@ export default function App() {
         pcRef.current = pc;
 
         (pc as any).onicecandidate = (e: any) => {
-          if (e.candidate) {
-            ws.send(JSON.stringify({
-              type: 'ice-candidate',
-              candidate: e.candidate,
-            }));
-          }
+          if (e.candidate) ws.send(JSON.stringify({ type: 'ice-candidate', candidate: e.candidate }));
         };
 
         try {
           // @ts-ignore
           const stream = await mediaDevices.getDisplayMedia({ video: true });
-          stream.getTracks().forEach((track) => {
-            pc.addTrack(track, stream);
-          });
-          console.log('📹 Screen stream added to PeerConnection');
+          stream.getTracks().forEach((track) => pc.addTrack(track, stream));
         } catch (mediaErr) {
-          console.error('Failed to get display media:', mediaErr);
+          console.error('Media error:', mediaErr);
         }
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-
-        ws.send(JSON.stringify({
-          type: 'offer',
-          offer,
-        }));
-
-        setStatus('connected');
+        ws.send(JSON.stringify({ type: 'offer', offer }));
       };
 
       ws.onmessage = async (event) => {
         const msg = JSON.parse(event.data);
-
-        if (msg.type === 'answer') {
-          console.log('Answer received');
-          await pcRef.current?.setRemoteDescription(msg.answer);
-          setStatus('connected');
-        }
-
-        if (msg.type === 'ice-candidate') {
-          await pcRef.current?.addIceCandidate(msg.candidate);
-        }
-
-        if (msg.type === 'code-update') {
-          console.log('📝 Code update received');
-          setCurrentCode(msg.code);
-        }
+        if (msg.type === 'answer') await pcRef.current?.setRemoteDescription(msg.answer);
+        if (msg.type === 'ice-candidate') await pcRef.current?.addIceCandidate(msg.candidate);
+        if (msg.type === 'code-update') setCurrentCode(msg.code);
       };
 
       ws.onerror = () => setStatus('error');
       ws.onclose = () => setStatus('closed');
     } catch (e: any) {
-      console.error(e);
-      alert('Failed to connect: ' + e.message);
+      alert('Connection failed: ' + e.message);
       setStatus('error');
       setIsProvisioning(false);
     }
   };
+
+  if (showScanner) {
+    if (!permission) return <View />;
+    if (!permission.granted) {
+      return (
+        <View style={styles.container}>
+          <Text style={{ color: 'white', textAlign: 'center', marginTop: 100 }}>We need your permission to show the camera</Text>
+          <Button onPress={requestPermission} title="Grant Permission" />
+        </View>
+      );
+    }
+    return (
+      <View style={styles.container}>
+        <CameraView
+          style={StyleSheet.absoluteFillObject}
+          onBarcodeScanned={handleBarCodeScanned}
+          barcodeScannerSettings={{
+            barcodeTypes: ["qr"],
+          }}
+        />
+        <View style={styles.scannerOverlay}>
+          <Text style={styles.scannerText}>Scan the QR code in your browser</Text>
+          <Button title="Cancel" onPress={() => setShowScanner(false)} color="#fff" />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -129,18 +147,19 @@ export default function App() {
       </View>
 
       <View style={styles.previewContainer}>
-        {status === 'idle' || status === 'error' ? (
+        {(status === 'idle' || status === 'error') && !isProvisioning ? (
           <View style={styles.setupBox}>
-            <Text style={styles.label}>Enter Workspace ID:</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.user-xxxx"
-              placeholderTextColor="#666"
-              value={userId}
-              onChangeText={setUserId}
-              autoCapitalize="none"
-            />
-            <Text style={styles.hint}>You can find this ID in your browser's console or URL.</Text>
+            {userId ? (
+              <View style={styles.pairedBox}>
+                <Text style={styles.pairedLabel}>Last Paired Workspace:</Text>
+                <Text style={styles.pairedId}>{userId}</Text>
+                <Text style={styles.pairedUrl}>{orchestratorUrl}</Text>
+                <View style={{ height: 20 }} />
+                <Button title="Reconnect" onPress={() => startConnection(orchestratorUrl, userId)} />
+                <Text style={styles.orText}>— OR —</Text>
+              </View>
+            ) : null}
+            <Button title="Scan QR to Pair" onPress={() => setShowScanner(true)} color="#007aff" />
           </View>
         ) : null}
 
@@ -163,9 +182,7 @@ export default function App() {
       </View>
 
       <View style={styles.controls}>
-        {status === 'idle' || status === 'error' ? (
-           <Button title="Connect to Workspace" onPress={start} />
-        ) : (
+        {status !== 'idle' && status !== 'error' && (
            <Button title="Disconnect" onPress={() => {
              wsRef.current?.close();
              setStatus('idle');
@@ -202,28 +219,53 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   setupBox: {
+    flex: 1,
     padding: 30,
     justifyContent: 'center',
   },
-  label: {
-    color: '#fff',
-    fontSize: 16,
-    marginBottom: 10,
-  },
-  input: {
-    backgroundColor: '#222',
+  pairedBox: {
+    alignItems: 'center',
+    marginBottom: 30,
+    padding: 20,
+    backgroundColor: '#1a1a2e',
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#444',
-    borderRadius: 8,
-    padding: 15,
-    color: '#fff',
-    fontSize: 18,
-    fontFamily: 'monospace',
-    marginBottom: 10,
+    borderColor: '#333',
   },
-  hint: {
+  pairedLabel: {
     color: '#666',
     fontSize: 12,
+    marginBottom: 5,
+  },
+  pairedId: {
+    color: '#007aff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    fontFamily: 'monospace',
+  },
+  pairedUrl: {
+    color: '#444',
+    fontSize: 10,
+    marginTop: 5,
+  },
+  orText: {
+    color: '#333',
+    marginVertical: 15,
+    fontWeight: 'bold',
+  },
+  scannerOverlay: {
+    position: 'absolute',
+    bottom: 50,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  scannerText: {
+    color: '#fff',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    padding: 10,
+    borderRadius: 5,
+    marginBottom: 20,
   },
   loadingBox: {
     flex: 1,
