@@ -134,6 +134,7 @@ signalingWss.on("connection", (ws: WebSocket) => {
               }
               
               fs.writeFileSync(fullPath, fileData.content);
+              console.log(`   📄 Written: ${filePath}`);
             }
             console.log('✅ File system synced');
           } catch (err: any) {
