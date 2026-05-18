@@ -87,24 +87,27 @@ signalingWss.on("connection", (ws: WebSocket) => {
           break;
 
         case 'code-update':
-          console.log(`Code update from ${clientId}`);
-          let transpiledCode = data.code;
-          try {
-            const result = transform(data.code, { transforms: ["jsx", "typescript", "imports"], production: true });
-            transpiledCode = result.code;
-            console.log('✅ Code transpiled');
-          } catch (err: any) {
-            console.error("❌ Transpilation error:", err.message);
-          }
+          console.log(`[CodeUpdate] Received update from ${clientId} (${clients.get(clientId)?.type})`);
+          const codeToSend = data.code;
+          
+          let mobileCount = 0;
           clients.forEach((client, id) => {
             if (id !== clientId && client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
-              client.ws.send(JSON.stringify({ type: 'code-update', code: transpiledCode, originalCode: data.code, fromId: clientId }));
+              client.ws.send(JSON.stringify({ 
+                type: 'code-update', 
+                code: codeToSend, 
+                originalCode: data.code, 
+                fromId: clientId 
+              }));
+              mobileCount++;
             }
           });
+          console.log(`[CodeUpdate] Broadcasted to ${mobileCount} mobile clients`);
           break;
 
         case 'get-clients':
           const clientList = Array.from(clients.values()).filter(c => c.id !== clientId).map(c => ({ id: c.id, type: c.type }));
+          console.log(`[Status] Client ${clientId} requested client list. Found ${clientList.length} others.`);
           ws.send(JSON.stringify({ type: 'clients-list', clients: clientList }));
           break;
       }
