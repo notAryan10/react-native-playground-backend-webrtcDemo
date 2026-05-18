@@ -5,10 +5,18 @@ import { transform } from "sucrase";
 import * as pty from 'node-pty';
 import * as os from 'os';
 import * as http from 'http';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || (os.platform() === 'win32' ? process.cwd() : '/workspace');
+
+// Ensure workspace exists
+if (!fs.existsSync(WORKSPACE_DIR)) {
+  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+}
+
 const INACTIVITY_TIMEOUT = 60 * 60 * 1000; // 1 hour
 
 let inactivityTimer: NodeJS.Timeout;
@@ -103,6 +111,27 @@ signalingWss.on("connection", (ws: WebSocket) => {
             }
           });
           console.log(`[CodeUpdate] Broadcasted to ${mobileCount} mobile clients`);
+          break;
+
+        case 'file-update':
+          const { files } = data; // Record<string, { content: string }>
+          console.log(`[FileUpdate] Syncing ${Object.keys(files).length} files to disk...`);
+          
+          try {
+            for (const [filePath, fileData] of Object.entries(files as Record<string, any>)) {
+              const fullPath = path.join(WORKSPACE_DIR, filePath);
+              const dir = path.dirname(fullPath);
+              
+              if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+              }
+              
+              fs.writeFileSync(fullPath, fileData.content);
+            }
+            console.log('✅ File system synced');
+          } catch (err: any) {
+            console.error('❌ File sync error:', err.message);
+          }
           break;
 
         case 'get-clients':
