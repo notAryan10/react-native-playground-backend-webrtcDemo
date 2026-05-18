@@ -232,6 +232,9 @@ app.get("/status", (req, res) => {
 
 const httpServer = http.createServer(app);
 
+// Use a number for the port and ensure it defaults correctly
+const finalPort = Number(PORT);
+
 httpServer.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url!, `http://${req.headers.host}`);
 
@@ -246,10 +249,9 @@ httpServer.on("upgrade", (req, socket, head) => {
   }
 });
 
-httpServer.listen(Number(PORT), "0.0.0.0", () => {
-  console.log(`✅ Server is ready!`);
-  console.log(`Listening on port ${PORT} at 0.0.0.0`);
-  console.log(`WebRTC signaling and Terminal available on same port`);
+httpServer.listen(finalPort, "0.0.0.0", () => {
+  console.log(`✅ Server is ready and listening on port ${finalPort}`);
+  console.log(`Environment PORT: ${process.env.PORT}`);
 });
 
 process.on("SIGINT", () => {
