@@ -10,11 +10,18 @@ import * as path from 'path';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const WORKSPACE_DIR = process.env.WORKSPACE_DIR || (os.platform() === 'win32' ? process.cwd() : '/workspace');
+// Default to a relative 'workspace' folder if not specified, 
+// ensuring we don't try to write to /workspace (root) on platforms like Render
+const WORKSPACE_DIR = process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace');
 
 // Ensure workspace exists
-if (!fs.existsSync(WORKSPACE_DIR)) {
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+try {
+  if (!fs.existsSync(WORKSPACE_DIR)) {
+    console.log(`Creating workspace at: ${WORKSPACE_DIR}`);
+    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+  }
+} catch (err: any) {
+  console.error(`⚠️ Could not create workspace directory: ${err.message}. Terminal might have limited functionality.`);
 }
 
 const INACTIVITY_TIMEOUT = 60 * 60 * 1000; // 1 hour
