@@ -14,10 +14,12 @@ const getAutoUrl = () => {
   const debuggerHost = Constants.expoConfig?.hostUri;
   if (debuggerHost) {
     const host = debuggerHost.split(':')[0];
-    return `http://${host}:4000`; // Orchestrator usually runs on 4000
+    return host; // Just return host, let caller handle protocol/port if needed, or rely on QR
   }
-  return 'http://localhost:4000';
+  return '';
 };
+
+const DEFAULT_STUN_SERVER = '';
 
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -85,7 +87,7 @@ export default function App() {
         ws.send(JSON.stringify({ type: 'register', clientType: 'mobile' }));
 
         const pc = new RTCPeerConnection({
-          iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+          iceServers: [{ urls: DEFAULT_STUN_SERVER }],
         });
         pcRef.current = pc;
 
