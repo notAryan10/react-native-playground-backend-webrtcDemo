@@ -19,7 +19,7 @@ metadata:
 spec:
   containers:
     - name: backend
-      image: rn-playground-backend:latest
+      image: notaryan/rn-playground-backend:latest
       ports:
         - containerPort: 3000
       env:
