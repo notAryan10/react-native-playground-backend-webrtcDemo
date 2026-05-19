@@ -107,10 +107,38 @@ export default function App() {
       };
 
       ws.onmessage = async (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'answer') await pcRef.current?.setRemoteDescription(msg.answer);
-        if (msg.type === 'ice-candidate') await pcRef.current?.addIceCandidate(msg.candidate);
-        if (msg.type === 'code-update') setCurrentCode(msg.code);
+        try {
+          const msg = JSON.parse(event.data);
+          console.log(`[WS] Received message: ${msg.type}`);
+
+          if (msg.type === 'answer') {
+            if (pcRef.current) {
+              await pcRef.current.setRemoteDescription(msg.answer).catch(err => {
+                console.error('Failed to set remote description:', err);
+              });
+            }
+          }
+          
+          if (msg.type === 'ice-candidate') {
+            if (pcRef.current) {
+              await pcRef.current.addIceCandidate(msg.candidate).catch(err => {
+                console.error('Failed to add ICE candidate:', err);
+              });
+            }
+          }
+          
+          if (msg.type === 'code-update') {
+            console.log('[Sync] Received code update, length:', msg.code?.length);
+            setCurrentCode(msg.code);
+            setStatus('running'); // Update status to reflect code execution
+          }
+
+          if (msg.type === 'client-id') {
+            console.log('[WS] Assigned Client ID:', msg.clientId);
+          }
+        } catch (e) {
+          console.error('[WS] Error processing message:', e);
+        }
       };
 
       ws.onerror = () => setStatus('error');

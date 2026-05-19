@@ -93,6 +93,7 @@ interface Client {
 }
 
 const clients: Map<string, Client> = new Map();
+let currentCode: string | null = null;
 
 function sendToClient(clientId: string, message: any) {
   const client = clients.get(clientId);
@@ -122,36 +123,55 @@ signalingWss.on("connection", (ws: WebSocket) => {
 
       switch (data.type) {
         case 'register':
-          clients.set(clientId, { ws, id: clientId, type: data.clientType || 'web' });
-          console.log(`Client ${clientId} registered as ${data.clientType || 'web'}`);
-          broadcastToOthers(clientId, { type: 'client-connected', clientId, clientType: data.clientType || 'web' });
+          const clientType = data.clientType || 'web';
+          clients.set(clientId, { ws, id: clientId, type: clientType });
+          console.log(`Client ${clientId} registered as ${clientType}`);
+          
+          // Send current code if a mobile client joins
+          if (clientType === 'mobile' && currentCode) {
+            console.log(`[Sync] Sending current code to newly joined mobile client: ${clientId}`);
+            ws.send(JSON.stringify({ type: 'code-update', code: currentCode }));
+          }
+
+          broadcastToOthers(clientId, { type: 'client-connected', clientId, clientType });
           break;
 
         case 'offer':
-          if (data.targetId) sendToClient(data.targetId, { type: 'offer', offer: data.offer, fromId: clientId });
-          else broadcastToOthers(clientId, { type: 'offer', offer: data.offer, fromId: clientId });
+          if (data.targetId) {
+            sendToClient(data.targetId, { type: 'offer', offer: data.offer, fromId: clientId });
+          } else {
+            // If no target specified, broadcast to all OTHER clients
+            // Usually, mobile sends offer, web receives it.
+            broadcastToOthers(clientId, { type: 'offer', offer: data.offer, fromId: clientId });
+          }
           break;
 
         case 'answer':
-          if (data.targetId) sendToClient(data.targetId, { type: 'answer', answer: data.answer, fromId: clientId });
-          else broadcastToOthers(clientId, { type: 'answer', answer: data.answer, fromId: clientId });
+          if (data.targetId) {
+            sendToClient(data.targetId, { type: 'answer', answer: data.answer, fromId: clientId });
+          } else {
+            broadcastToOthers(clientId, { type: 'answer', answer: data.answer, fromId: clientId });
+          }
           break;
 
         case 'ice-candidate':
-          if (data.targetId) sendToClient(data.targetId, { type: 'ice-candidate', candidate: data.candidate, fromId: clientId });
-          else broadcastToOthers(clientId, { type: 'ice-candidate', candidate: data.candidate, fromId: clientId });
+          if (data.targetId) {
+            sendToClient(data.targetId, { type: 'ice-candidate', candidate: data.candidate, fromId: clientId });
+          } else {
+            broadcastToOthers(clientId, { type: 'ice-candidate', candidate: data.candidate, fromId: clientId });
+          }
           break;
 
         case 'code-update':
           console.log(`[CodeUpdate] Received update from ${clientId} (${clients.get(clientId)?.type})`);
-          const codeToSend = data.code;
+          currentCode = data.code;
           
           let mobileCount = 0;
           clients.forEach((client, id) => {
             if (id !== clientId && client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
               client.ws.send(JSON.stringify({ 
                 type: 'code-update', 
-                code: codeToSend, 
+                code: currentCode, 
                 originalCode: data.code, 
                 fromId: clientId 
               }));
