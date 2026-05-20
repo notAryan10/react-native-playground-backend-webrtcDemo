@@ -11,45 +11,6 @@ import * as path from 'path';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Helper to recursively read files for sync
-function getWorkspaceFiles(dir: string, baseDir: string = ''): Record<string, { name: string, content: string, language: string }> {
-  const files: Record<string, { name: string, content: string, language: string }> = {};
-  const items = fs.readdirSync(dir);
-
-  for (const item of items) {
-    if (item === 'node_modules' || item === '.git') continue;
-    
-    const fullPath = path.join(dir, item);
-    const relativePath = path.join(baseDir, item);
-    const stat = fs.statSync(fullPath);
-
-    if (stat.isDirectory()) {
-      Object.assign(files, getWorkspaceFiles(fullPath, relativePath));
-    } else {
-      const content = fs.readFileSync(fullPath, 'utf-8');
-      const ext = path.extname(item).toLowerCase();
-      const language = ext === '.json' ? 'json' : (ext === '.md' ? 'markdown' : (ext === '.html' ? 'html' : 'typescript'));
-      files[relativePath] = { name: item, content, language };
-    }
-  }
-  return files;
-}
-
-// Periodic task to sync FS to web clients
-setInterval(() => {
-  if (clients.size > 0) {
-    try {
-      const files = getWorkspaceFiles(WORKSPACE_DIR);
-      clients.forEach((client) => {
-        if (client.type === 'web' && client.ws.readyState === WebSocket.OPEN) {
-          client.ws.send(JSON.stringify({ type: 'fs-sync', files }));
-        }
-      });
-    } catch (err) {
-      // Workspace might be empty or not yet created
-    }
-  }
-}, 3000);
 
 // Default to a relative 'workspace' folder if not specified, 
 // ensuring we don't try to write to /workspace (root) on platforms like Render
