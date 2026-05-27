@@ -77,7 +77,27 @@ function bundleFiles(files: Record<string, string>, entryPoint = 'src/App.tsx', 
     while ((m = importRe.exec(content)) !== null) {
       const imp = m[1] || m[2];
       const resolved = resolvePath(filePath, imp, files);
-      if (resolved) visit(resolved);
+      if (resolved) {
+        visit(resolved);
+      } else {
+        // File not yet synced — register a stub so the app renders an error
+        // instead of crashing with "got: undefined"
+        const stubPath = imp;
+        if (!moduleCode[stubPath]) {
+          console.warn(`[Bundler] Missing local module: "${imp}" imported from "${filePath}" — registering stub`);
+          moduleCode[stubPath] = `
+Object.defineProperty(exports, "__esModule", { value: true });
+var MissingModule = function() {
+  var React = require('react');
+  var RN = require('react-native');
+  return React.createElement(RN.View, { style: { flex:1, justifyContent:'center', alignItems:'center', backgroundColor:'#2d1b1b', padding:20 } },
+    React.createElement(RN.Text, { style: { color:'#ff6b6b', fontSize:16, fontFamily:'monospace' } },
+      "Missing file: ${imp.replace(/'/g, "\\'")}\\nCreate it in the file explorer."));
+};
+exports.default = MissingModule;
+`;
+        }
+      }
     }
 
     try {
@@ -124,6 +144,11 @@ function __require(id) {
     __cache[id] = __mod;
     __modules[id](__mod, __mod.exports, __require);
     return __mod.exports;
+  }
+  // Local paths (e.g. "src/components/Foo.tsx") that weren't bundled — missing file
+  if (id.indexOf('/') !== -1 && !id.startsWith('@')) {
+    console.warn('[Bundle] Unresolved local module:', id);
+    return {};
   }
   return require(id);
 }
