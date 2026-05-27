@@ -1,6 +1,19 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import * as ReactNative from 'react-native';
+import * as ExpoHaptics from 'expo-haptics';
+import * as ExpoAV from 'expo-av';
+import * as ExpoCamera from 'expo-camera';
+import * as ExpoImagePicker from 'expo-image-picker';
+import * as ExpoLocation from 'expo-location';
+import * as ExpoSensors from 'expo-sensors';
+import * as ExpoLinearGradient from 'expo-linear-gradient';
+import * as ExpoBlur from 'expo-blur';
+import * as ExpoFileSystem from 'expo-file-system';
+import * as ExpoNotifications from 'expo-notifications';
+import * as Reanimated from 'react-native-reanimated';
+import * as GestureHandler from 'react-native-gesture-handler';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface CodeRunnerProps {
     code: string;
@@ -9,7 +22,19 @@ interface CodeRunnerProps {
 const modules: Record<string, any> = {
     'react': React,
     'react-native': ReactNative,
-    '@react-native-async-storage/async-storage': require('@react-native-async-storage/async-storage'),
+    '@react-native-async-storage/async-storage': AsyncStorage,
+    'expo-haptics': ExpoHaptics,
+    'expo-av': ExpoAV,
+    'expo-camera': ExpoCamera,
+    'expo-image-picker': ExpoImagePicker,
+    'expo-location': ExpoLocation,
+    'expo-sensors': ExpoSensors,
+    'expo-linear-gradient': ExpoLinearGradient,
+    'expo-blur': ExpoBlur,
+    'expo-file-system': ExpoFileSystem,
+    'expo-notifications': ExpoNotifications,
+    'react-native-reanimated': Reanimated,
+    'react-native-gesture-handler': GestureHandler,
 };
 
 const requireModule = (name: string) => {

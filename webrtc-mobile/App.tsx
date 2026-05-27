@@ -132,7 +132,13 @@ export default function App() {
           if (msg.type === 'code-update') {
             console.log('[Sync] Received code update, length:', msg.code?.length);
             setCurrentCode(msg.code);
-            setStatus('running'); // Update status to reflect code execution
+            setStatus('running');
+          }
+
+          if (msg.type === 'module-bundle') {
+            console.log(`[Modules] Received bundle for: ${msg.name}`);
+            if (!(global as any).DynamicModules) (global as any).DynamicModules = {};
+            (global as any).DynamicModules[msg.name] = msg.code;
           }
 
           if (msg.type === 'client-id') {

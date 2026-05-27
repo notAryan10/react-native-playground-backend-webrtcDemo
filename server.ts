@@ -1,12 +1,138 @@
 import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import cors from "cors";
-import { transform } from "sucrase";
 import * as pty from 'node-pty';
 import * as os from 'os';
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import { createRequire } from 'module';
+import * as babel from '@babel/core';
+
+const _require = createRequire(import.meta.url);
+const reanimatedPlugin = _require('react-native-reanimated/plugin');
+
+// ─── Bundler ────────────────────────────────────────────────────────────────
+
+function resolvePath(fromFile: string, importPath: string, files: Record<string, string>): string | null {
+  if (!importPath.startsWith('.')) return null;
+  const fromDir = fromFile.split('/').slice(0, -1).join('/');
+  const parts = (fromDir ? fromDir + '/' + importPath : importPath).split('/');
+  const resolved: string[] = [];
+  for (const part of parts) {
+    if (part === '.' || part === '') continue;
+    if (part === '..') resolved.pop();
+    else resolved.push(part);
+  }
+  const base = resolved.join('/');
+  for (const ext of ['', '.tsx', '.ts', '.jsx', '.js']) {
+    if (files[base + ext] !== undefined) return base + ext;
+  }
+  return null;
+}
+
+function makePathRewritePlugin(fromFile: string, files: Record<string, string>) {
+  return () => ({
+    visitor: {
+      ImportDeclaration(nodePath: any) {
+        const src = nodePath.node.source.value as string;
+        if (src.startsWith('.')) {
+          const resolved = resolvePath(fromFile, src, files);
+          if (resolved) nodePath.node.source.value = resolved;
+        }
+      },
+      CallExpression(nodePath: any) {
+        const { node } = nodePath;
+        if (
+          node.callee.name === 'require' &&
+          node.arguments.length === 1 &&
+          node.arguments[0].type === 'StringLiteral' &&
+          (node.arguments[0].value as string).startsWith('.')
+        ) {
+          const resolved = resolvePath(fromFile, node.arguments[0].value, files);
+          if (resolved) node.arguments[0].value = resolved;
+        }
+      }
+    }
+  });
+}
+
+function bundleFiles(files: Record<string, string>, entryPoint = 'src/App.tsx', workspaceDir?: string): string {
+  const visited = new Set<string>();
+  const moduleCode: Record<string, string> = {};
+
+  function visit(filePath: string) {
+    if (visited.has(filePath)) return;
+    visited.add(filePath);
+
+    const content = files[filePath];
+    if (content === undefined) {
+      console.warn(`[Bundler] File not found: ${filePath}`);
+      return;
+    }
+
+    // Scan for local imports BEFORE transform so we visit them
+    const importRe = /(?:import\s+[\s\S]*?from\s+['"](\.[^'"]+)['"]|require\s*\(\s*['"](\.[^'"]+)['"]\s*\))/g;
+    let m: RegExpExecArray | null;
+    while ((m = importRe.exec(content)) !== null) {
+      const imp = m[1] || m[2];
+      const resolved = resolvePath(filePath, imp, files);
+      if (resolved) visit(resolved);
+    }
+
+    try {
+      // Use real disk path as filename so reanimated plugin can read it for worklet extraction
+      const diskFilename = workspaceDir ? path.join(workspaceDir, filePath) : filePath;
+      const result = babel.transformSync(content, {
+        filename: diskFilename,
+        presets: [
+          ['@babel/preset-env', { targets: { node: 'current' }, modules: 'commonjs' }],
+          ['@babel/preset-react', { runtime: 'classic' }],
+          '@babel/preset-typescript',
+        ],
+        plugins: [
+          makePathRewritePlugin(filePath, files),
+          reanimatedPlugin,
+        ],
+        retainLines: false,
+        compact: false,
+        configFile: false,
+        babelrc: false,
+      });
+      moduleCode[filePath] = result?.code ?? '';
+    } catch (err: any) {
+      console.error(`[Bundler] Error in ${filePath}:`, err.message);
+      moduleCode[filePath] = `/* Bundler error in ${filePath}: ${String(err.message).replace(/\*\//g, '')} */`;
+    }
+  }
+
+  visit(entryPoint);
+
+  const registrations = Object.entries(moduleCode)
+    .map(([fp, code]) =>
+      `__modules[${JSON.stringify(fp)}] = function(module, exports, require) {\n${code}\n};`
+    )
+    .join('\n\n');
+
+  return `
+var __modules = {};
+var __cache  = {};
+function __require(id) {
+  if (__cache[id]) return __cache[id].exports;
+  if (__modules[id]) {
+    var __mod = { exports: {} };
+    __cache[id] = __mod;
+    __modules[id](__mod, __mod.exports, __require);
+    return __mod.exports;
+  }
+  return require(id);
+}
+
+${registrations}
+
+module.exports = __require(${JSON.stringify(entryPoint)});
+`.trim();
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -55,6 +181,26 @@ interface Client {
 
 const clients: Map<string, Client> = new Map();
 let currentCode: string | null = null;
+let currentBundle: string | null = null;
+const fileRegistry: Map<string, string> = new Map();
+const moduleBundles: Map<string, string> = new Map();
+
+function rebundle() {
+  if (fileRegistry.size === 0) return;
+  try {
+    const files = Object.fromEntries(fileRegistry);
+    currentBundle = bundleFiles(files, 'src/App.tsx', WORKSPACE_DIR);
+    console.log(`[Bundler] Bundle ready (${currentBundle.length} bytes)`);
+
+    clients.forEach((client) => {
+      if (client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+      }
+    });
+  } catch (err: any) {
+    console.error('[Bundler] rebundle failed:', err.message);
+  }
+}
 
 function sendToClient(clientId: string, message: any) {
   const client = clients.get(clientId);
@@ -88,10 +234,19 @@ signalingWss.on("connection", (ws: WebSocket) => {
           clients.set(clientId, { ws, id: clientId, type: clientType });
           console.log(`Client ${clientId} registered as ${clientType}`);
           
-          // Send current code if a mobile client joins
-          if (clientType === 'mobile' && currentCode) {
-            console.log(`[Sync] Sending current code to newly joined mobile client: ${clientId}`);
-            ws.send(JSON.stringify({ type: 'code-update', code: currentCode }));
+          // On mobile join: send latest bundle (or fallback to legacy code), then dynamic JS bundles
+          if (clientType === 'mobile') {
+            const codeToSend = currentBundle ?? currentCode;
+            if (codeToSend) {
+              console.log(`[Sync] Sending ${currentBundle ? 'bundle' : 'legacy code'} to: ${clientId}`);
+              ws.send(JSON.stringify({ type: 'code-update', code: codeToSend }));
+            }
+            if (moduleBundles.size > 0) {
+              console.log(`[Sync] Sending ${moduleBundles.size} module bundle(s) to: ${clientId}`);
+              moduleBundles.forEach((code, name) => {
+                ws.send(JSON.stringify({ type: 'module-bundle', name, code }));
+              });
+            }
           }
 
           broadcastToOthers(clientId, { type: 'client-connected', clientId, clientType });
@@ -144,23 +299,39 @@ signalingWss.on("connection", (ws: WebSocket) => {
 
         case 'file-update':
           const { files } = data; // Record<string, { content: string }>
-          console.log(`[FileUpdate] Syncing ${Object.keys(files).length} files to disk...`);
-          
+          console.log(`[FileUpdate] Syncing ${Object.keys(files).length} files...`);
+
           try {
             for (const [filePath, fileData] of Object.entries(files as Record<string, any>)) {
+              // Update in-memory registry for bundler
+              fileRegistry.set(filePath, fileData.content);
+
+              // Persist to disk
               const fullPath = path.join(WORKSPACE_DIR, filePath);
               const dir = path.dirname(fullPath);
-              
-              if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-              }
-              
+              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
               fs.writeFileSync(fullPath, fileData.content);
-              console.log(`   📄 Written: ${filePath}`);
             }
-            console.log('✅ File system synced');
+            console.log('✅ Files synced — triggering rebundle');
+            rebundle();
           } catch (err: any) {
             console.error('❌ File sync error:', err.message);
+          }
+          break;
+
+        case 'module-bundle':
+          const { name: moduleName, code: moduleCode } = data;
+          if (moduleName && moduleCode) {
+            moduleBundles.set(moduleName, moduleCode);
+            console.log(`[ModuleBundle] Stored and broadcasting bundle for: ${moduleName} (${moduleCode.length} bytes)`);
+            let mobileModuleCount = 0;
+            clients.forEach((client, id) => {
+              if (id !== clientId && client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
+                client.ws.send(JSON.stringify({ type: 'module-bundle', name: moduleName, code: moduleCode }));
+                mobileModuleCount++;
+              }
+            });
+            console.log(`[ModuleBundle] Sent to ${mobileModuleCount} mobile client(s)`);
           }
           break;
 
