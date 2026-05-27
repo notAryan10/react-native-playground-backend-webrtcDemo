@@ -142,15 +142,35 @@ if (typeof Proxy !== 'undefined') {
   return `
 var __modules = {};
 var __cache  = {};
+function __makeEmptyExportStub(id) {
+  var Stub = function() {
+    var React = require('react');
+    var RN = require('react-native');
+    return React.createElement(RN.View, { style: { flex:1, justifyContent:'center', alignItems:'center', backgroundColor:'#2d1b1b', padding:20 } },
+      React.createElement(RN.Text, { style: { color:'#ff6b6b', fontSize:14, fontFamily:'monospace' } },
+        'No exports in ' + id + '\\nAdd: export default function MyComponent() { ... }'));
+  };
+  var stub = { __esModule: true, default: Stub };
+  if (typeof Proxy !== 'undefined') {
+    return new Proxy(stub, { get: function(t, p) { return p in t ? t[p] : Stub; } });
+  }
+  return stub;
+}
 function __require(id) {
   if (__cache[id]) return __cache[id].exports;
   if (__modules[id]) {
     var __mod = { exports: {} };
     __cache[id] = __mod;
     __modules[id](__mod, __mod.exports, __require);
-    return __mod.exports;
+    var result = __mod.exports;
+    // Local module compiled but exported nothing — named imports would be undefined
+    if (id.indexOf('/') !== -1 && !id.startsWith('@') && !result.__esModule && Object.keys(result).length === 0) {
+      console.warn('[Bundle] ' + id + ' has no exports. Add a default or named export.');
+      return __makeEmptyExportStub(id);
+    }
+    return result;
   }
-  // Local paths (e.g. "src/components/Foo.tsx") that weren't bundled — missing file
+  // Local paths that weren't bundled at all — missing file
   if (id.indexOf('/') !== -1 && !id.startsWith('@')) {
     console.warn('[Bundle] Unresolved local module:', id);
     return {};
