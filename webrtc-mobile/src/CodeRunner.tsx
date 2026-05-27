@@ -37,6 +37,23 @@ const modules: Record<string, any> = {
     'react-native-gesture-handler': GestureHandler,
 };
 
+const makeMissingModuleStub = (name: string) => {
+    const MissingComponent = () =>
+        React.createElement(
+            View,
+            { style: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#2d1b1b', padding: 20 } },
+            React.createElement(Text, { style: { color: '#ff6b6b', fontSize: 14, fontFamily: 'monospace' } },
+                `Missing module: ${name}\nCreate the file in the file explorer.`)
+        );
+    const stub: any = { __esModule: true, default: MissingComponent };
+    if (typeof Proxy !== 'undefined') {
+        return new Proxy(stub, {
+            get: (target: any, prop: string) => prop in target ? target[prop] : MissingComponent,
+        });
+    }
+    return stub;
+};
+
 const requireModule = (name: string) => {
     if (modules[name]) return modules[name];
 
@@ -61,6 +78,14 @@ const requireModule = (name: string) => {
             }
         }
         return dynamicModules[name];
+    }
+
+    // Relative path that escaped the bundle's __require — return a visible error stub
+    // so named imports (e.g. `import { Foo } from './missing'`) render an error component
+    // instead of crashing with "Element type is invalid: got undefined".
+    if (name.startsWith('.') || name.startsWith('/')) {
+        console.warn(`[Playground] Missing local module: '${name}'`);
+        return makeMissingModuleStub(name);
     }
 
     console.warn(`Module '${name}' not found in playground scope.`);
@@ -93,6 +118,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 export default function CodeRunner({ code }: CodeRunnerProps) {
     const [Component, setComponent] = useState<React.ComponentType | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [bundleKey, setBundleKey] = useState(0);
 
     useEffect(() => {
         if (!code) return;
@@ -107,6 +133,7 @@ export default function CodeRunner({ code }: CodeRunnerProps) {
                 const ExportedComponent = module.exports.default || module.exports;
 
                 if (typeof ExportedComponent === 'function') {
+                    setBundleKey(k => k + 1);
                     setComponent(() => ExportedComponent);
                     setError(null);
                 } else {
@@ -140,7 +167,7 @@ export default function CodeRunner({ code }: CodeRunnerProps) {
     }
 
     return (
-        <ErrorBoundary key={code.substring(0, 20)}>
+        <ErrorBoundary key={bundleKey}>
             <View style={styles.runnerContainer}>
                 <Component />
             </View>

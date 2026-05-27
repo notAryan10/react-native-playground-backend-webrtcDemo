@@ -95,6 +95,11 @@ var MissingModule = function() {
       "Missing file: ${imp.replace(/'/g, "\\'")}\\nCreate it in the file explorer."));
 };
 exports.default = MissingModule;
+if (typeof Proxy !== 'undefined') {
+  module.exports = new Proxy(exports, {
+    get: function(target, prop) { return prop in target ? target[prop] : MissingModule; }
+  });
+}
 `;
         }
       }
