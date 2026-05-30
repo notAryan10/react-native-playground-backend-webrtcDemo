@@ -14,6 +14,22 @@ import * as ExpoNotifications from 'expo-notifications';
 import * as Reanimated from 'react-native-reanimated';
 import * as GestureHandler from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as VectorIcons from '@expo/vector-icons';
+import AntDesign from '@expo/vector-icons/AntDesign';
+import Entypo from '@expo/vector-icons/Entypo';
+import EvilIcons from '@expo/vector-icons/EvilIcons';
+import Feather from '@expo/vector-icons/Feather';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
+import FontAwesome5 from '@expo/vector-icons/FontAwesome5';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
+import Fontisto from '@expo/vector-icons/Fontisto';
+import Foundation from '@expo/vector-icons/Foundation';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import Octicons from '@expo/vector-icons/Octicons';
+import SimpleLineIcons from '@expo/vector-icons/SimpleLineIcons';
+import Zocial from '@expo/vector-icons/Zocial';
 
 interface CodeRunnerProps {
     code: string;
@@ -35,6 +51,22 @@ const modules: Record<string, any> = {
     'expo-notifications': ExpoNotifications,
     'react-native-reanimated': Reanimated,
     'react-native-gesture-handler': GestureHandler,
+    '@expo/vector-icons': VectorIcons,
+    '@expo/vector-icons/AntDesign': { default: AntDesign, AntDesign },
+    '@expo/vector-icons/Entypo': { default: Entypo, Entypo },
+    '@expo/vector-icons/EvilIcons': { default: EvilIcons, EvilIcons },
+    '@expo/vector-icons/Feather': { default: Feather, Feather },
+    '@expo/vector-icons/FontAwesome': { default: FontAwesome, FontAwesome },
+    '@expo/vector-icons/FontAwesome5': { default: FontAwesome5, FontAwesome5 },
+    '@expo/vector-icons/FontAwesome6': { default: FontAwesome6, FontAwesome6 },
+    '@expo/vector-icons/Fontisto': { default: Fontisto, Fontisto },
+    '@expo/vector-icons/Foundation': { default: Foundation, Foundation },
+    '@expo/vector-icons/Ionicons': { default: Ionicons, Ionicons },
+    '@expo/vector-icons/MaterialCommunityIcons': { default: MaterialCommunityIcons, MaterialCommunityIcons },
+    '@expo/vector-icons/MaterialIcons': { default: MaterialIcons, MaterialIcons },
+    '@expo/vector-icons/Octicons': { default: Octicons, Octicons },
+    '@expo/vector-icons/SimpleLineIcons': { default: SimpleLineIcons, SimpleLineIcons },
+    '@expo/vector-icons/Zocial': { default: Zocial, Zocial },
 };
 
 const makeMissingModuleStub = (name: string) => {
