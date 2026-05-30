@@ -116,14 +116,22 @@ export default function App() {
         try {
           // @ts-ignore
           const stream = await mediaDevices.getDisplayMedia({ video: true });
-          stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+          stream.getTracks().forEach((track: any) => pc.addTrack(track, stream));
         } catch (mediaErr) {
           console.error('Media error:', mediaErr);
         }
 
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: 'offer', offer }));
+        const sendOffer = async () => {
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({ type: 'offer', offer }));
+          } catch (err) {
+            console.error('Failed to send offer:', err);
+          }
+        };
+
+        await sendOffer();
       };
 
       ws.onmessage = async (event) => {
@@ -167,6 +175,20 @@ export default function App() {
 
           if (msg.type === 'client-id') {
             console.log('[WS] Assigned Client ID:', msg.clientId);
+          }
+
+          // A new web client joined — re-send our offer so they get the WebRTC stream.
+          if (msg.type === 'client-connected' && msg.clientType === 'web') {
+            console.log('[WebRTC] New web viewer joined — re-sending offer');
+            if (pcRef.current) {
+              try {
+                const offer = await pcRef.current.createOffer();
+                await pcRef.current.setLocalDescription(offer);
+                ws.send(JSON.stringify({ type: 'offer', offer }));
+              } catch (err) {
+                console.error('Failed to re-send offer:', err);
+              }
+            }
           }
         } catch (e) {
           console.error('[WS] Error processing message:', e);

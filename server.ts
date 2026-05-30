@@ -9,8 +9,14 @@ import * as path from 'path';
 import { createRequire } from 'module';
 import * as babel from '@babel/core';
 
-const _require = createRequire(import.meta.url);
-const reanimatedPlugin = _require('react-native-reanimated/plugin');
+let reanimatedPlugin: any = null;
+try {
+  const _require = createRequire(import.meta.url);
+  reanimatedPlugin = _require('react-native-reanimated/plugin');
+  console.log('[Bundler] react-native-reanimated/plugin loaded');
+} catch (e: any) {
+  console.warn('[Bundler] react-native-reanimated/plugin unavailable — worklet transforms disabled:', e.message);
+}
 
 // ─── Bundler ────────────────────────────────────────────────────────────────
 
@@ -117,7 +123,7 @@ if (typeof Proxy !== 'undefined') {
         ],
         plugins: [
           makePathRewritePlugin(filePath, files),
-          reanimatedPlugin,
+          ...(reanimatedPlugin ? [reanimatedPlugin] : []),
         ],
         retainLines: false,
         compact: false,
