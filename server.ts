@@ -310,6 +310,14 @@ signalingWss.on("connection", (ws: WebSocket) => {
             if (codeToSend) {
               console.log(`[Sync] Sending ${currentBundle ? 'bundle' : 'legacy code'} to: ${clientId}`);
               ws.send(JSON.stringify({ type: 'code-update', code: codeToSend }));
+            } else {
+              // No bundle yet — ask all connected web clients to resync their files immediately
+              console.log(`[Sync] Mobile joined but no bundle — requesting file resync from ${clients.size} web client(s)`);
+              clients.forEach((client) => {
+                if (client.type === 'web' && client.ws.readyState === WebSocket.OPEN) {
+                  client.ws.send(JSON.stringify({ type: 'resync-request' }));
+                }
+              });
             }
             if (moduleBundles.size > 0) {
               console.log(`[Sync] Sending ${moduleBundles.size} module bundle(s) to: ${clientId}`);
@@ -406,7 +414,7 @@ signalingWss.on("connection", (ws: WebSocket) => {
           break;
 
         case 'request-bundle':
-          // Mobile requests the latest bundle (used when it joined before files were synced)
+          console.log(`[RequestBundle] files=${fileRegistry.size}, bundle=${currentBundle?.length ?? 'null'}, clients=${clients.size}`);
           if (currentBundle) {
             console.log(`[Sync] Mobile ${clientId} requested bundle — sending (${currentBundle.length} bytes)`);
             ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
@@ -416,6 +424,10 @@ signalingWss.on("connection", (ws: WebSocket) => {
           } else if (fileRegistry.size > 0) {
             console.log(`[Sync] Mobile ${clientId} requested bundle — triggering rebundle`);
             rebundle();
+            // If rebundle succeeded, currentBundle is now set — send it directly to this client
+            if (currentBundle) {
+              ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+            }
           } else {
             console.log(`[Sync] Mobile ${clientId} requested bundle — no files yet`);
           }
