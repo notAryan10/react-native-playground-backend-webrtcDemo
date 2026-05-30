@@ -111,29 +111,37 @@ if (typeof Proxy !== 'undefined') {
       }
     }
 
+    const babelOpts = (withReanimated: boolean) => ({
+      filename: workspaceDir ? path.join(workspaceDir, filePath) : filePath,
+      presets: [
+        ['@babel/preset-env', { targets: { node: 'current' }, modules: 'commonjs' }],
+        ['@babel/preset-react', { runtime: 'classic' }],
+        '@babel/preset-typescript',
+      ] as any[],
+      plugins: [
+        makePathRewritePlugin(filePath, files),
+        ...(withReanimated && reanimatedPlugin ? [reanimatedPlugin] : []),
+      ] as any[],
+      retainLines: false,
+      compact: false,
+      configFile: false,
+      babelrc: false,
+    });
+
     try {
-      // Use real disk path as filename so reanimated plugin can read it for worklet extraction
-      const diskFilename = workspaceDir ? path.join(workspaceDir, filePath) : filePath;
-      const result = babel.transformSync(content, {
-        filename: diskFilename,
-        presets: [
-          ['@babel/preset-env', { targets: { node: 'current' }, modules: 'commonjs' }],
-          ['@babel/preset-react', { runtime: 'classic' }],
-          '@babel/preset-typescript',
-        ],
-        plugins: [
-          makePathRewritePlugin(filePath, files),
-          ...(reanimatedPlugin ? [reanimatedPlugin] : []),
-        ],
-        retainLines: false,
-        compact: false,
-        configFile: false,
-        babelrc: false,
-      });
+      const result = babel.transformSync(content, babelOpts(true));
       moduleCode[filePath] = result?.code ?? '';
     } catch (err: any) {
-      console.error(`[Bundler] Error in ${filePath}:`, err.message);
-      moduleCode[filePath] = `/* Bundler error in ${filePath}: ${String(err.message).replace(/\*\//g, '')} */`;
+      console.error(`[Bundler] Error in ${filePath} (with reanimated):`, err.message);
+      // Retry without reanimated plugin
+      try {
+        const result = babel.transformSync(content, babelOpts(false));
+        moduleCode[filePath] = result?.code ?? '';
+        console.log(`[Bundler] ${filePath} compiled OK without reanimated plugin`);
+      } catch (err2: any) {
+        console.error(`[Bundler] Error in ${filePath} (without reanimated):`, err2.message);
+        moduleCode[filePath] = `/* Bundler error in ${filePath}: ${String(err2.message).replace(/\*\//g, '')} */`;
+      }
     }
   }
 
@@ -249,14 +257,27 @@ function broadcastBuilderLog(level: 'info' | 'error', message: string) {
   });
 }
 
+function broadcastAll(message: any) {
+  clients.forEach((client) => {
+    if (client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(JSON.stringify(message));
+    }
+  });
+}
+
 function rebundle() {
-  if (fileRegistry.size === 0) return;
+  if (fileRegistry.size === 0) {
+    console.log('[Bundler] rebundle called but fileRegistry is empty');
+    return;
+  }
+  console.log(`[Bundler] Starting rebundle — ${fileRegistry.size} file(s) in registry`);
   try {
     const files = Object.fromEntries(fileRegistry);
     currentBundle = bundleFiles(files, 'src/App.tsx', WORKSPACE_DIR);
     const bytes = currentBundle.length;
     console.log(`[Bundler] Bundle ready (${bytes} bytes)`);
-    broadcastBuilderLog('info', `Bundle ready (${(bytes / 1024).toFixed(1)} KB)`);
+    // Notify all clients (web gets BUILDER LOGS, mobile gets it in Metro)
+    broadcastAll({ type: 'builder-log', level: 'info', message: `Bundle ready (${(bytes / 1024).toFixed(1)} KB)` });
 
     let mobileCount = 0;
     clients.forEach((client) => {
@@ -265,10 +286,11 @@ function rebundle() {
         mobileCount++;
       }
     });
-    broadcastBuilderLog('info', `Sent to ${mobileCount} mobile client(s)`);
+    console.log(`[Bundler] Sent to ${mobileCount} mobile client(s)`);
+    broadcastAll({ type: 'builder-log', level: 'info', message: `Sent to ${mobileCount} mobile client(s)` });
   } catch (err: any) {
-    console.error('[Bundler] rebundle failed:', err.message);
-    broadcastBuilderLog('error', `Bundler error: ${err.message}`);
+    console.error('[Bundler] rebundle failed:', err.message, err.stack);
+    broadcastAll({ type: 'builder-log', level: 'error', message: `Bundler error: ${err.message}` });
   }
 }
 
