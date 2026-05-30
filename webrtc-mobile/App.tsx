@@ -19,7 +19,7 @@ const getAutoUrl = () => {
   return '';
 };
 
-const DEFAULT_STUN_SERVER = '';
+const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302';
 
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
