@@ -86,6 +86,24 @@ export default function App() {
         setStatus('connected');
         ws.send(JSON.stringify({ type: 'register', clientType: 'mobile' }));
 
+        // If no code arrives within 4 seconds, request the current bundle explicitly.
+        // This handles the case where rebundle ran before this client registered.
+        const retryTimer = setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            console.log('[Sync] No code received — requesting bundle from server');
+            ws.send(JSON.stringify({ type: 'request-bundle' }));
+          }
+        }, 4000);
+        ws.addEventListener('message', function onFirstCode(event: MessageEvent) {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'code-update' && msg.code) {
+              clearTimeout(retryTimer);
+              ws.removeEventListener('message', onFirstCode);
+            }
+          } catch {}
+        });
+
         const pc = new RTCPeerConnection({
           iceServers: [{ urls: DEFAULT_STUN_SERVER }],
         });
@@ -131,8 +149,14 @@ export default function App() {
           
           if (msg.type === 'code-update') {
             console.log('[Sync] Received code update, length:', msg.code?.length);
-            setCurrentCode(msg.code);
-            setStatus('running');
+            if (msg.code) {
+              setCurrentCode(msg.code);
+              setStatus('running');
+            }
+          }
+
+          if (msg.type === 'builder-log') {
+            console.log(`[Builder][${msg.level}] ${msg.message}`);
           }
 
           if (msg.type === 'module-bundle') {

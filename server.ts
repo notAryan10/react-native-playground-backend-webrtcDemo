@@ -235,20 +235,34 @@ let currentBundle: string | null = null;
 const fileRegistry: Map<string, string> = new Map();
 const moduleBundles: Map<string, string> = new Map();
 
+function broadcastBuilderLog(level: 'info' | 'error', message: string) {
+  clients.forEach((client) => {
+    if (client.type === 'web' && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(JSON.stringify({ type: 'builder-log', level, message }));
+    }
+  });
+}
+
 function rebundle() {
   if (fileRegistry.size === 0) return;
   try {
     const files = Object.fromEntries(fileRegistry);
     currentBundle = bundleFiles(files, 'src/App.tsx', WORKSPACE_DIR);
-    console.log(`[Bundler] Bundle ready (${currentBundle.length} bytes)`);
+    const bytes = currentBundle.length;
+    console.log(`[Bundler] Bundle ready (${bytes} bytes)`);
+    broadcastBuilderLog('info', `Bundle ready (${(bytes / 1024).toFixed(1)} KB)`);
 
+    let mobileCount = 0;
     clients.forEach((client) => {
       if (client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
         client.ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+        mobileCount++;
       }
     });
+    broadcastBuilderLog('info', `Sent to ${mobileCount} mobile client(s)`);
   } catch (err: any) {
     console.error('[Bundler] rebundle failed:', err.message);
+    broadcastBuilderLog('error', `Bundler error: ${err.message}`);
   }
 }
 
@@ -382,6 +396,22 @@ signalingWss.on("connection", (ws: WebSocket) => {
               }
             });
             console.log(`[ModuleBundle] Sent to ${mobileModuleCount} mobile client(s)`);
+          }
+          break;
+
+        case 'request-bundle':
+          // Mobile requests the latest bundle (used when it joined before files were synced)
+          if (currentBundle) {
+            console.log(`[Sync] Mobile ${clientId} requested bundle — sending (${currentBundle.length} bytes)`);
+            ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+            moduleBundles.forEach((code, name) => {
+              ws.send(JSON.stringify({ type: 'module-bundle', name, code }));
+            });
+          } else if (fileRegistry.size > 0) {
+            console.log(`[Sync] Mobile ${clientId} requested bundle — triggering rebundle`);
+            rebundle();
+          } else {
+            console.log(`[Sync] Mobile ${clientId} requested bundle — no files yet`);
           }
           break;
 
