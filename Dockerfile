@@ -22,6 +22,9 @@ COPY . .
 # Build TypeScript
 RUN npm run build
 
+# Prune devDependencies, leaving only production-compiled modules
+RUN npm prune --production
+
 # Final stage
 FROM node:20-slim
 
@@ -37,9 +40,8 @@ WORKDIR /app
 # Copy package manifests
 COPY package*.json ./
 
-# Install only production dependencies
-# This will trigger a clean compile of node-pty for the target OS/arch
-RUN npm install --production
+# Copy pre-compiled production node_modules from builder stage
+COPY --from=builder /app/node_modules ./node_modules
 
 # Copy built assets from builder stage
 COPY --from=builder /app/dist ./dist
