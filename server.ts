@@ -31,9 +31,39 @@ function resolvePath(fromFile: string, importPath: string, files: Record<string,
     else resolved.push(part);
   }
   const base = resolved.join('/');
-  for (const ext of ['', '.tsx', '.ts', '.jsx', '.js']) {
+  const exts = ['', '.tsx', '.ts', '.jsx', '.js'];
+
+  // 1. Direct file: base, base.tsx, base.ts, ...
+  for (const ext of exts) {
     if (files[base + ext] !== undefined) return base + ext;
   }
+
+  // 2. Directory import: base/index.tsx, base/index.ts, ...
+  //    (e.g. `import './components'` -> 'src/components/index.tsx')
+  for (const ext of exts.slice(1)) {
+    if (files[base + '/index' + ext] !== undefined) return base + '/index' + ext;
+  }
+
+  // 3. Forgiving unique-suffix fallback. A file created in the explorer without
+  //    a folder selected lands at the workspace root (e.g. 'components/Card.tsx')
+  //    while `src/App.tsx` imports it as './components/Card', resolving to
+  //    'src/components/Card'. Match on the full import-relative tail so a file
+  //    saved under a different root still resolves instead of rendering a
+  //    "Missing module" stub. Only resolves when exactly one file matches, so
+  //    a genuinely missing import still falls through to the stub and ambiguous
+  //    names are never guessed.
+  const importTail = importPath.replace(/^(\.\.?\/)+/, '').replace(/\.(tsx|ts|jsx|js)$/, '');
+  if (importTail) {
+    const matches = Object.keys(files).filter((k) => {
+      const kNoExt = k.replace(/\.(tsx|ts|jsx|js)$/, '');
+      return kNoExt === importTail || kNoExt.endsWith('/' + importTail);
+    });
+    if (matches.length === 1) {
+      console.warn(`[Bundler] Resolved "${importPath}" -> "${matches[0]}" via suffix fallback (file is not under the expected directory).`);
+      return matches[0];
+    }
+  }
+
   return null;
 }
 
