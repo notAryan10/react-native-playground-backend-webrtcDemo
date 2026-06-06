@@ -8,6 +8,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createRequire } from 'module';
 import * as babel from '@babel/core';
+import * as crypto from 'crypto';
+
+// Per-file Babel output cache. Keyed by file path + a hash of the file's
+// content and how its relative imports resolve, so an edit to one file only
+// recompiles that file instead of re-Babeling the whole project on every
+// keystroke. Bounded to avoid unbounded growth across long sessions.
+const compileCache = new Map<string, string>();
+const COMPILE_CACHE_MAX = 500;
 
 let reanimatedPlugin: any = null;
 try {
@@ -107,12 +115,18 @@ function bundleFiles(files: Record<string, string>, entryPoint = 'src/App.tsx', 
       return;
     }
 
-    // Scan for local imports BEFORE transform so we visit them
+    // Scan for local imports BEFORE transform so we visit them.
+    // resolutionSig records how each relative import resolves; it is folded
+    // into the compile cache key so that if a dependency moves/appears (which
+    // changes the rewritten import path) this file is recompiled even though
+    // its own content is unchanged.
     const importRe = /(?:import\s+[\s\S]*?from\s+['"](\.[^'"]+)['"]|require\s*\(\s*['"](\.[^'"]+)['"]\s*\))/g;
     let m: RegExpExecArray | null;
+    const resolutionSig: string[] = [];
     while ((m = importRe.exec(content)) !== null) {
       const imp = m[1] || m[2];
       const resolved = resolvePath(filePath, imp, files);
+      resolutionSig.push(`${imp}>${resolved ?? 'MISSING'}`);
       if (resolved) {
         visit(resolved);
       } else {
@@ -158,21 +172,43 @@ if (typeof Proxy !== 'undefined') {
       babelrc: false,
     });
 
+    // Skip Babel entirely if this exact file content + import resolution was
+    // already compiled. This is the hot path: on a single-file edit, every
+    // other file in the project is a cache hit.
+    const cacheKey =
+      filePath + ':' +
+      crypto.createHash('sha1').update(content).digest('hex') + ':' +
+      crypto.createHash('sha1').update(resolutionSig.join('|')).digest('hex');
+
+    const cached = compileCache.get(cacheKey);
+    if (cached !== undefined) {
+      moduleCode[filePath] = cached;
+      return;
+    }
+
+    let compiled: string;
     try {
       const result = babel.transformSync(content, babelOpts(true));
-      moduleCode[filePath] = result?.code ?? '';
+      compiled = result?.code ?? '';
     } catch (err: any) {
       console.error(`[Bundler] Error in ${filePath} (with reanimated):`, err.message);
       // Retry without reanimated plugin
       try {
         const result = babel.transformSync(content, babelOpts(false));
-        moduleCode[filePath] = result?.code ?? '';
+        compiled = result?.code ?? '';
         console.log(`[Bundler] ${filePath} compiled OK without reanimated plugin`);
       } catch (err2: any) {
         console.error(`[Bundler] Error in ${filePath} (without reanimated):`, err2.message);
-        moduleCode[filePath] = `/* Bundler error in ${filePath}: ${String(err2.message).replace(/\*\//g, '')} */`;
+        compiled = `/* Bundler error in ${filePath}: ${String(err2.message).replace(/\*\//g, '')} */`;
       }
     }
+    moduleCode[filePath] = compiled;
+    if (compileCache.size >= COMPILE_CACHE_MAX) {
+      // Simple bound: drop the oldest entry (insertion order).
+      const oldest = compileCache.keys().next().value;
+      if (oldest !== undefined) compileCache.delete(oldest);
+    }
+    compileCache.set(cacheKey, compiled);
   }
 
   visit(entryPoint);
@@ -343,6 +379,14 @@ signalingWss.on("connection", (ws: WebSocket) => {
   const clientId = `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   console.log(`WebRTC signaling client connected: ${clientId}`);
 
+  // Heartbeat: mark alive on connect and on every pong reply. The interval
+  // below pings each client periodically; sockets that miss a pong are
+  // terminated. This keeps connections warm through the orchestrator proxy
+  // (which otherwise reaps idle WS, causing the editor's disconnect/reconnect
+  // loop and delayed code sync) and cleans up half-open sockets.
+  (ws as any).isAlive = true;
+  ws.on('pong', () => { (ws as any).isAlive = true; });
+
   ws.send(JSON.stringify({ type: 'client-id', clientId: clientId }));
 
   ws.on("message", (message: Buffer) => {
@@ -502,6 +546,23 @@ signalingWss.on("connection", (ws: WebSocket) => {
     broadcastToOthers(clientId, { type: 'client-disconnected', clientId });
   });
 });
+
+// Heartbeat sweep: ping every client every 30s and terminate any that did not
+// reply to the previous ping. Keeps connections warm through the orchestrator
+// proxy (preventing the editor's disconnect/reconnect loop) and reaps dead
+// sockets so `clients` does not accumulate stale entries.
+const HEARTBEAT_INTERVAL = 30000;
+const heartbeat = setInterval(() => {
+  signalingWss.clients.forEach((ws: any) => {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      return;
+    }
+    ws.isAlive = false;
+    try { ws.ping(); } catch { /* socket already closing */ }
+  });
+}, HEARTBEAT_INTERVAL);
+signalingWss.on('close', () => clearInterval(heartbeat));
 
 terminalWss.on("connection", (ws: WebSocket) => {
   console.log("🖥️  Terminal connected");
