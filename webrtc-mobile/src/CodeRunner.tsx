@@ -97,11 +97,11 @@ const requireModule = (name: string) => {
                 const exports: any = {};
                 const module: any = { exports };
 
-                const func = new Function('require', 'exports', 'module', 'process', bundleCode);
+                const func = new Function('require', 'exports', 'module', 'global', 'process', bundleCode);
 
                 const process = { env: { NODE_ENV: 'development' } };
 
-                func(requireModule, exports, module, process);
+                func(requireModule, exports, module, global, process);
 
                 dynamicModules[name] = module.exports.default || module.exports;
             } catch (e) {
@@ -160,8 +160,14 @@ export default function CodeRunner({ code }: CodeRunnerProps) {
                 const exports: any = {};
                 const module: any = { exports };
 
-                const func = new Function('require', 'exports', 'module', code);
-                func(requireModule, exports, module);
+                // Expose `global` and a minimal `process` to the bundle. The
+                // reanimated Babel plugin compiles worklets into code that
+                // references `global` (e.g. `new global.Error()`), and many
+                // third-party CJS bundles read `process.env.NODE_ENV`; without
+                // these in scope the bundle throws "global does not exist".
+                const processShim = { env: { NODE_ENV: 'development' } };
+                const func = new Function('require', 'exports', 'module', 'global', 'process', code);
+                func(requireModule, exports, module, global, processShim);
                 const ExportedComponent = module.exports.default || module.exports;
 
                 if (typeof ExportedComponent === 'function') {
