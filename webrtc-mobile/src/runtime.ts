@@ -90,6 +90,7 @@ class ModuleRuntime {
         this.cache[id] = module;
         try {
             factory(module, module.exports, this.require, g, this.processShim);
+            console.log('[HMR] ran', id, '-> exports:', JSON.stringify(Object.keys(module.exports || {})));
         } catch (e) {
             delete this.cache[id]; // don't cache a module that threw while initializing
             throw e;

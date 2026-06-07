@@ -209,11 +209,8 @@ export default function CodeRunner({ code, rootComponent, renderKey }: CodeRunne
         const Root = rootComponent;
         return (
             <ErrorBoundary key={renderKey ?? 0}>
-                <View style={[styles.runnerContainer, { backgroundColor: '#0a3d2a' }]}>
-                    <Text style={{ color: '#39ff14', fontSize: 11, padding: 4 }}>HMR host mounted — Root below</Text>
-                    <View style={{ flex: 1 }}>
-                        <Root />
-                    </View>
+                <View style={styles.runnerContainer}>
+                    <Root />
                 </View>
             </ErrorBoundary>
         );

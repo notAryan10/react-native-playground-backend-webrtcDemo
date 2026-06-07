@@ -87,6 +87,22 @@ function resolvePath(fromFile: string, importPath: string, files: Record<string,
     }
   }
 
+  // 4. Last resort: unique basename match. Handles a file placed in a different
+  //    folder than the import implies (e.g. `../constants/colors` resolving to a
+  //    lone `colors.ts` anywhere in the project). Only when exactly one file has
+  //    that basename, so it never guesses between ambiguous names.
+  const baseName = importTail.split('/').pop();
+  if (baseName) {
+    const byName = Object.keys(files).filter((k) => {
+      const kNoExt = k.replace(/\.(tsx|ts|jsx|js)$/, '');
+      return kNoExt.split('/').pop() === baseName;
+    });
+    if (byName.length === 1) {
+      console.warn(`[Bundler] Resolved "${importPath}" -> "${byName[0]}" via unique basename match.`);
+      return byName[0];
+    }
+  }
+
   return null;
 }
 
