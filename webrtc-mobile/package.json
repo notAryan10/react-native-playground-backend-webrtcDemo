@@ -34,7 +34,8 @@
     "react-native": "0.76.9",
     "react-native-gesture-handler": "~2.20.2",
     "react-native-reanimated": "~3.16.1",
-    "react-native-webrtc": "^124.0.7"
+    "react-native-webrtc": "^124.0.7",
+    "react-refresh": "^0.14.2"
   },
   "devDependencies": {
     "@expo/ngrok": "^4.1.0",

@@ -26,6 +26,21 @@ try {
   console.warn('[Bundler] react-native-reanimated/plugin unavailable — worklet transforms disabled:', e.message);
 }
 
+// react-refresh/babel instruments each module with $RefreshReg$/$RefreshSig$
+// calls so the device runtime can hot-swap component implementations while
+// preserving hook state (Tier 2 Fast Refresh). Disable with HMR_FAST_REFRESH=0.
+let reactRefreshPlugin: any = null;
+const FAST_REFRESH = process.env.HMR_FAST_REFRESH !== '0';
+if (FAST_REFRESH) {
+  try {
+    const _require = createRequire(import.meta.url);
+    reactRefreshPlugin = _require('react-refresh/babel');
+    console.log('[Bundler] react-refresh/babel loaded — Fast Refresh enabled');
+  } catch (e: any) {
+    console.warn('[Bundler] react-refresh/babel unavailable — Fast Refresh disabled:', e.message);
+  }
+}
+
 // ─── Bundler ────────────────────────────────────────────────────────────────
 
 function resolvePath(fromFile: string, importPath: string, files: Record<string, string>): string | null {
@@ -104,9 +119,12 @@ function makePathRewritePlugin(fromFile: string, files: Record<string, string>) 
 // Compile every file reachable from the entry into a map of
 // path -> compiled CommonJS factory body. This is the unit of work shared by
 // both the monolithic bundle (wrapBundle) and the incremental HMR patch path.
-function compileModules(files: Record<string, string>, entryPoint = 'src/App.tsx', workspaceDir?: string): Record<string, string> {
+function compileModules(files: Record<string, string>, entryPoint = 'src/App.tsx', workspaceDir?: string): { moduleCode: Record<string, string>; deps: Record<string, string[]> } {
   const visited = new Set<string>();
   const moduleCode: Record<string, string> = {};
+  // deps[importer] = resolved paths it imports — used to bubble HMR patches up
+  // to importers so Fast Refresh propagates (Metro-style).
+  const deps: Record<string, string[]> = {};
 
   function visit(filePath: string) {
     if (visited.has(filePath)) return;
@@ -131,6 +149,7 @@ function compileModules(files: Record<string, string>, entryPoint = 'src/App.tsx
       const resolved = resolvePath(filePath, imp, files);
       resolutionSig.push(`${imp}>${resolved ?? 'MISSING'}`);
       if (resolved) {
+        (deps[filePath] ||= []).push(resolved);
         visit(resolved);
       } else {
         // File not yet synced — register a stub so the app renders an error
@@ -168,6 +187,7 @@ if (typeof Proxy !== 'undefined') {
       plugins: [
         makePathRewritePlugin(filePath, files),
         ...(withReanimated && reanimatedPlugin ? [reanimatedPlugin] : []),
+        ...(reactRefreshPlugin ? [[reactRefreshPlugin, { skipEnvCheck: true }]] : []),
       ] as any[],
       retainLines: false,
       compact: false,
@@ -215,7 +235,7 @@ if (typeof Proxy !== 'undefined') {
   }
 
   visit(entryPoint);
-  return moduleCode;
+  return { moduleCode, deps };
 }
 
 // Wrap a compiled module map into one self-contained bundle string with an
@@ -274,7 +294,7 @@ module.exports = __require(${JSON.stringify(entryPoint)});
 }
 
 function bundleFiles(files: Record<string, string>, entryPoint = 'src/App.tsx', workspaceDir?: string): string {
-  return wrapBundle(compileModules(files, entryPoint, workspaceDir), entryPoint);
+  return wrapBundle(compileModules(files, entryPoint, workspaceDir).moduleCode, entryPoint);
 }
 
 const app = express();
@@ -366,12 +386,31 @@ function rebundle() {
 
     // Compile once, then derive both the incremental patch (new clients) and
     // the monolithic bundle (legacy clients) from the same module map.
-    const nextModules = compileModules(files, ENTRY_POINT, WORKSPACE_DIR);
+    const { moduleCode: nextModules, deps } = compileModules(files, ENTRY_POINT, WORKSPACE_DIR);
 
-    // Diff against the last-sent registry to build the minimal HMR patch.
+    // Find content-changed modules vs the last-sent registry.
+    const contentChanged = Object.keys(nextModules).filter((p) => moduleRegistry[p] !== nextModules[p]);
+
+    // Bubble the change up to importers (transitive). Fast Refresh needs every
+    // module on the path from a changed file to a component boundary to re-run
+    // so updated constants/hooks/components propagate, mirroring Metro. Build a
+    // reverse-dependency map (imported -> importers) and BFS from the changed set.
+    const reverse: Record<string, string[]> = {};
+    for (const [importer, imported] of Object.entries(deps)) {
+      for (const dep of imported) (reverse[dep] ||= []).push(importer);
+    }
+    const dirty = new Set<string>(contentChanged);
+    const queue = [...contentChanged];
+    while (queue.length) {
+      const p = queue.shift()!;
+      for (const importer of reverse[p] || []) {
+        if (!dirty.has(importer)) { dirty.add(importer); queue.push(importer); }
+      }
+    }
+
     const changed: Record<string, string> = {};
-    for (const [p, code] of Object.entries(nextModules)) {
-      if (moduleRegistry[p] !== code) changed[p] = code;
+    for (const p of dirty) {
+      if (nextModules[p] !== undefined) changed[p] = nextModules[p];
     }
     const removed = Object.keys(moduleRegistry).filter((p) => !(p in nextModules));
     moduleRegistry = nextModules;
@@ -380,7 +419,7 @@ function rebundle() {
     const unchanged = nextBundle === currentBundle;
     currentBundle = nextBundle;
 
-    if (unchanged && Object.keys(changed).length === 0 && removed.length === 0) {
+    if (unchanged && contentChanged.length === 0 && removed.length === 0) {
       // Reconnect-driven resyncs and multi-client joins call rebundle() with
       // unchanged files; suppress the rebroadcast. New clients still get the
       // full state via the 'register' handler.

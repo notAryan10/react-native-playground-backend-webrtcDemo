@@ -175,9 +175,16 @@ export default function App() {
             const changedCount = Object.keys(msg.changed || {}).length;
             console.log(`[HMR] module-patch: ${changedCount} changed, ${(msg.removed || []).length} removed`);
             try {
-              Runtime.patch(msg.changed || {}, msg.removed || [], msg.entry);
-              setRootComponent(() => Runtime.getRoot());
-              setRenderVersion(v => v + 1);
+              const refreshed = Runtime.patch(msg.changed || {}, msg.removed || [], msg.entry);
+              if (refreshed) {
+                // Fast Refresh updated the mounted tree in place — keep state,
+                // don't remount.
+                console.log('[HMR] applied via Fast Refresh (state preserved)');
+              } else {
+                // Fallback: rebuild the root and remount.
+                setRootComponent(() => Runtime.getRoot());
+                setRenderVersion(v => v + 1);
+              }
               setStatus('running');
             } catch (e) { console.error('[HMR] patch failed:', e); }
           }
