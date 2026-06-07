@@ -61,6 +61,13 @@ class ModuleRuntime {
         const factory = this.modules[id];
         if (factory) return this.runFactory(id, factory);
 
+        // A path-like id (has a slash, not a scoped package) that isn't in the
+        // registry is an unresolved local module — log it so key mismatches are
+        // visible instead of silently returning an empty object.
+        if (id.indexOf('/') !== -1 && !id.startsWith('@')) {
+            console.warn('[HMR] unresolved local module:', JSON.stringify(id), '— known keys:', JSON.stringify(Object.keys(this.modules)));
+        }
+
         // Not a local module — resolve as a bare specifier (native/dynamic).
         return requireModule(id);
     };
@@ -154,8 +161,22 @@ class ModuleRuntime {
 
     // Require the entry and return its default export as the root component.
     getRoot(): React.ComponentType | null {
-        const exp = this.require(this.entry);
+        let exp: any;
+        try {
+            exp = this.require(this.entry);
+        } catch (e) {
+            console.error('[HMR] getRoot: entry require threw for', this.entry, e);
+            return null;
+        }
         const Comp = exp && (exp.default || exp);
+        console.log(
+            '[HMR] getRoot entry=', this.entry,
+            'exportKeys=', exp ? Object.keys(exp) : exp,
+            'defaultType=', typeof (exp && exp.default),
+            'CompType=', typeof Comp,
+            'CompName=', (Comp && (Comp.name || Comp.displayName)) || '(anon)',
+            'moduleCount=', Object.keys(this.modules).length,
+        );
         return typeof Comp === 'function' ? Comp : null;
     }
 }
