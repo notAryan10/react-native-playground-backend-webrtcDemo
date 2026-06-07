@@ -6,6 +6,7 @@ import {
 } from 'react-native-webrtc';
 import CodeRunner from './src/CodeRunner';
 import { Runtime } from './src/runtime';
+import { inspectAt, setInspectRoot, onInspectFrame } from './src/inspector';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -38,6 +39,20 @@ export default function App() {
   const [isProvisioning, setIsProvisioning] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
+  // Tap-to-source: transient highlight box drawn over the element the browser
+  // tapped on the streamed video.
+  const [inspectFrame, setInspectFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    onInspectFrame((frame) => setInspectFrame(frame && frame.width ? frame : null));
+    return () => onInspectFrame(null);
+  }, []);
+
+  useEffect(() => {
+    if (!inspectFrame) return;
+    const t = setTimeout(() => setInspectFrame(null), 1600);
+    return () => clearTimeout(t);
+  }, [inspectFrame]);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -206,6 +221,20 @@ export default function App() {
             console.log(`[Builder][${msg.level}] ${msg.message}`);
           }
 
+          // Tap-to-source: hit-test the tapped point and report the source back.
+          if (msg.type === 'inspect-at') {
+            const result = await inspectAt(msg.x, msg.y);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'inspect-result',
+                requestId: msg.requestId,
+                source: result.source,
+                componentName: result.componentName,
+                props: result.props,
+              }));
+            }
+          }
+
           if (msg.type === 'module-bundle') {
             console.log(`[Modules] Received bundle for: ${msg.name}`);
             if (!(global as any).DynamicModules) (global as any).DynamicModules = {};
@@ -271,7 +300,7 @@ export default function App() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} ref={(r) => setInspectRoot(r)}>
       <View style={styles.header}>
         <Text style={styles.title}>📡 Runtime Exec</Text>
         <Text style={styles.status}>Status: {status}</Text>
@@ -327,6 +356,22 @@ export default function App() {
            }} color="#ff3b30" />
         )}
       </View>
+
+      {inspectFrame && (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            left: inspectFrame.left,
+            top: inspectFrame.top,
+            width: inspectFrame.width,
+            height: inspectFrame.height,
+            borderWidth: 2,
+            borderColor: '#00e5ff',
+            backgroundColor: 'rgba(0,229,255,0.15)',
+          }}
+        />
+      )}
     </View>
   );
 }

@@ -106,6 +106,34 @@ function resolvePath(fromFile: string, importPath: string, files: Record<string,
   return null;
 }
 
+// Tap-to-source: stamp every JSX element with its origin as a literal prop the
+// device can read at runtime. React 18.3 fibers no longer retain `_debugSource`
+// and user code is eval'd via `new Function` (so error-stack source resolution
+// yields "<anonymous>"), making this the only reliable path-carrying channel.
+// `filePath` is the workspace-relative registry key, which is identical to the
+// frontend's file key, so the editor can map the result back with no rewriting.
+function makeSourceTagPlugin(filePath: string) {
+  return ({ types: t }: any) => ({
+    visitor: {
+      JSXOpeningElement(p: any) {
+        const attrs = p.node.attributes || [];
+        const already = attrs.some(
+          (a: any) => a.type === 'JSXAttribute' && a.name && a.name.name === '__rnpSrc'
+        );
+        if (already) return;
+        const start = p.node.loc && p.node.loc.start;
+        if (!start) return;
+        p.node.attributes.unshift(
+          t.jsxAttribute(
+            t.jsxIdentifier('__rnpSrc'),
+            t.stringLiteral(`${filePath}:${start.line}:${start.column}`)
+          )
+        );
+      },
+    },
+  });
+}
+
 function makePathRewritePlugin(fromFile: string, files: Record<string, string>) {
   return () => ({
     visitor: {
@@ -201,6 +229,7 @@ if (typeof Proxy !== 'undefined') {
         '@babel/preset-typescript',
       ] as any[],
       plugins: [
+        makeSourceTagPlugin(filePath),
         makePathRewritePlugin(filePath, files),
         ...(withReanimated && reanimatedPlugin ? [reanimatedPlugin] : []),
         ...(reactRefreshPlugin ? [[reactRefreshPlugin, { skipEnvCheck: true }]] : []),
@@ -637,6 +666,33 @@ signalingWss.on("connection", (ws: WebSocket) => {
           } else {
             console.log(`[Sync] Mobile ${clientId} requested bundle — no files yet`);
           }
+          break;
+
+        case 'inspect-at':
+          // Tap-to-source: a web client tapped the streamed video. Forward the
+          // normalized coordinate to mobile clients to hit-test. Tiny payload,
+          // independent of the bundle/patch path — no effect on edit latency.
+          clients.forEach((client, id) => {
+            if (id !== clientId && client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
+              client.ws.send(JSON.stringify({ type: 'inspect-at', x: data.x, y: data.y, requestId: data.requestId, fromId: clientId }));
+            }
+          });
+          break;
+
+        case 'inspect-result':
+          // Device resolved the tap to a source location — relay back to web.
+          clients.forEach((client, id) => {
+            if (id !== clientId && client.type === 'web' && client.ws.readyState === WebSocket.OPEN) {
+              client.ws.send(JSON.stringify({
+                type: 'inspect-result',
+                requestId: data.requestId,
+                source: data.source ?? null,
+                componentName: data.componentName ?? null,
+                props: data.props ?? null,
+                fromId: clientId,
+              }));
+            }
+          });
           break;
 
         case 'get-clients':
