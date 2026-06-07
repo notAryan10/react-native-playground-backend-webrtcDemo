@@ -101,7 +101,10 @@ function makePathRewritePlugin(fromFile: string, files: Record<string, string>) 
   });
 }
 
-function bundleFiles(files: Record<string, string>, entryPoint = 'src/App.tsx', workspaceDir?: string): string {
+// Compile every file reachable from the entry into a map of
+// path -> compiled CommonJS factory body. This is the unit of work shared by
+// both the monolithic bundle (wrapBundle) and the incremental HMR patch path.
+function compileModules(files: Record<string, string>, entryPoint = 'src/App.tsx', workspaceDir?: string): Record<string, string> {
   const visited = new Set<string>();
   const moduleCode: Record<string, string> = {};
 
@@ -212,7 +215,13 @@ if (typeof Proxy !== 'undefined') {
   }
 
   visit(entryPoint);
+  return moduleCode;
+}
 
+// Wrap a compiled module map into one self-contained bundle string with an
+// internal __require runtime. Used for the legacy `code-update` path and the
+// `request-bundle` fallback so old mobile builds keep working.
+function wrapBundle(moduleCode: Record<string, string>, entryPoint = 'src/App.tsx'): string {
   const registrations = Object.entries(moduleCode)
     .map(([fp, code]) =>
       `__modules[${JSON.stringify(fp)}] = function(module, exports, require) {\n${code}\n};`
@@ -262,6 +271,10 @@ ${registrations}
 
 module.exports = __require(${JSON.stringify(entryPoint)});
 `.trim();
+}
+
+function bundleFiles(files: Record<string, string>, entryPoint = 'src/App.tsx', workspaceDir?: string): string {
+  return wrapBundle(compileModules(files, entryPoint, workspaceDir), entryPoint);
 }
 
 const app = express();
@@ -315,6 +328,11 @@ let currentBundle: string | null = null;
 const fileRegistry: Map<string, string> = new Map();
 const moduleBundles: Map<string, string> = new Map();
 
+// Incremental HMR state. `moduleRegistry` holds the last compiled factory body
+// per file path; diffing against it on each rebundle yields the minimal patch.
+const ENTRY_POINT = 'src/App.tsx';
+let moduleRegistry: Record<string, string> = {};
+
 function broadcastBuilderLog(level: 'info' | 'error', message: string) {
   clients.forEach((client) => {
     if (client.type === 'web' && client.ws.readyState === WebSocket.OPEN) {
@@ -331,6 +349,12 @@ function broadcastAll(message: any) {
   });
 }
 
+// Send the full module set to one client (HMR clients use this on connect).
+function sendModuleSync(ws: WebSocket) {
+  if (Object.keys(moduleRegistry).length === 0) return;
+  ws.send(JSON.stringify({ type: 'module-sync', modules: moduleRegistry, entry: ENTRY_POINT }));
+}
+
 function rebundle() {
   if (fileRegistry.size === 0) {
     console.log('[Bundler] rebundle called but fileRegistry is empty');
@@ -339,15 +363,42 @@ function rebundle() {
   console.log(`[Bundler] Starting rebundle — ${fileRegistry.size} file(s) in registry`);
   try {
     const files = Object.fromEntries(fileRegistry);
-    currentBundle = bundleFiles(files, 'src/App.tsx', WORKSPACE_DIR);
+
+    // Compile once, then derive both the incremental patch (new clients) and
+    // the monolithic bundle (legacy clients) from the same module map.
+    const nextModules = compileModules(files, ENTRY_POINT, WORKSPACE_DIR);
+
+    // Diff against the last-sent registry to build the minimal HMR patch.
+    const changed: Record<string, string> = {};
+    for (const [p, code] of Object.entries(nextModules)) {
+      if (moduleRegistry[p] !== code) changed[p] = code;
+    }
+    const removed = Object.keys(moduleRegistry).filter((p) => !(p in nextModules));
+    moduleRegistry = nextModules;
+
+    const nextBundle = wrapBundle(nextModules, ENTRY_POINT);
+    const unchanged = nextBundle === currentBundle;
+    currentBundle = nextBundle;
+
+    if (unchanged && Object.keys(changed).length === 0 && removed.length === 0) {
+      // Reconnect-driven resyncs and multi-client joins call rebundle() with
+      // unchanged files; suppress the rebroadcast. New clients still get the
+      // full state via the 'register' handler.
+      console.log('[Bundler] No changes — skipping rebroadcast');
+      return;
+    }
+
     const bytes = currentBundle.length;
-    console.log(`[Bundler] Bundle ready (${bytes} bytes)`);
-    // Notify all clients (web gets BUILDER LOGS, mobile gets it in Metro)
-    broadcastAll({ type: 'builder-log', level: 'info', message: `Bundle ready (${(bytes / 1024).toFixed(1)} KB)` });
+    const changedPaths = Object.keys(changed);
+    console.log(`[Bundler] Bundle ready (${bytes} bytes) — ${changedPaths.length} changed, ${removed.length} removed`);
+    broadcastAll({ type: 'builder-log', level: 'info', message: `Bundle ready (${(bytes / 1024).toFixed(1)} KB) — ${changedPaths.length} module(s) changed` });
 
     let mobileCount = 0;
     clients.forEach((client) => {
       if (client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
+        // New HMR client gets the minimal patch; legacy client uses code-update.
+        // Both are sent — each app handles only the message type it understands.
+        client.ws.send(JSON.stringify({ type: 'module-patch', changed, removed, entry: ENTRY_POINT }));
         client.ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
         mobileCount++;
       }
@@ -400,8 +451,10 @@ signalingWss.on("connection", (ws: WebSocket) => {
           clients.set(clientId, { ws, id: clientId, type: clientType });
           console.log(`Client ${clientId} registered as ${clientType}`);
           
-          // On mobile join: send latest bundle (or fallback to legacy code), then dynamic JS bundles
+          // On mobile join: send full HMR module set (new app) + latest bundle
+          // (legacy app), then dynamic JS bundles. Each app uses what it knows.
           if (clientType === 'mobile') {
+            sendModuleSync(ws);
             const codeToSend = currentBundle ?? currentCode;
             if (codeToSend) {
               console.log(`[Sync] Sending ${currentBundle ? 'bundle' : 'legacy code'} to: ${clientId}`);
@@ -513,6 +566,7 @@ signalingWss.on("connection", (ws: WebSocket) => {
           console.log(`[RequestBundle] files=${fileRegistry.size}, bundle=${currentBundle?.length ?? 'null'}, clients=${clients.size}`);
           if (currentBundle) {
             console.log(`[Sync] Mobile ${clientId} requested bundle — sending (${currentBundle.length} bytes)`);
+            sendModuleSync(ws);
             ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
             moduleBundles.forEach((code, name) => {
               ws.send(JSON.stringify({ type: 'module-bundle', name, code }));
@@ -522,6 +576,7 @@ signalingWss.on("connection", (ws: WebSocket) => {
             rebundle();
             // If rebundle succeeded, currentBundle is now set — send it directly to this client
             if (currentBundle) {
+              sendModuleSync(ws);
               ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
             }
           } else {

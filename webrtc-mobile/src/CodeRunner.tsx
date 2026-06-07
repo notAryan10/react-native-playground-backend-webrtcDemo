@@ -32,7 +32,13 @@ import SimpleLineIcons from '@expo/vector-icons/SimpleLineIcons';
 import Zocial from '@expo/vector-icons/Zocial';
 
 interface CodeRunnerProps {
-    code: string;
+    // Legacy path: a full self-contained bundle string, eval'd on each change.
+    code?: string;
+    // HMR path: a root component built externally by the module Runtime. When
+    // this prop is present (even null), CodeRunner renders it instead of eval'ing
+    // `code`. `renderKey` is bumped on each patch to remount the ErrorBoundary.
+    rootComponent?: React.ComponentType | null;
+    renderKey?: number;
 }
 
 const modules: Record<string, any> = {
@@ -86,7 +92,7 @@ const makeMissingModuleStub = (name: string) => {
     return stub;
 };
 
-const requireModule = (name: string) => {
+export const requireModule = (name: string) => {
     if (modules[name]) return modules[name];
 
     const dynamicModules = (global as any).DynamicModules || {};
@@ -147,12 +153,15 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
     }
 }
 
-export default function CodeRunner({ code }: CodeRunnerProps) {
+export default function CodeRunner({ code, rootComponent, renderKey }: CodeRunnerProps) {
     const [Component, setComponent] = useState<React.ComponentType | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [bundleKey, setBundleKey] = useState(0);
 
+    const hmrMode = rootComponent !== undefined;
+
     useEffect(() => {
+        if (hmrMode) return; // HMR Runtime owns rendering; skip the legacy eval
         if (!code) return;
 
         const timeoutId = setTimeout(() => {
@@ -185,7 +194,26 @@ export default function CodeRunner({ code }: CodeRunnerProps) {
         }, 800);
 
         return () => clearTimeout(timeoutId);
-    }, [code]);
+    }, [code, hmrMode]);
+
+    // HMR mode: the module Runtime supplies the root component directly.
+    if (hmrMode) {
+        if (!rootComponent) {
+            return (
+                <View style={styles.placeholder}>
+                    <Text style={styles.placeholderText}>Waiting for code from editor...</Text>
+                </View>
+            );
+        }
+        const Root = rootComponent;
+        return (
+            <ErrorBoundary key={renderKey ?? 0}>
+                <View style={styles.runnerContainer}>
+                    <Root />
+                </View>
+            </ErrorBoundary>
+        );
+    }
 
     if (error) {
         return (

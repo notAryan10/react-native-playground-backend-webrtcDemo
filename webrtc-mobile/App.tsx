@@ -5,6 +5,7 @@ import {
   mediaDevices,
 } from 'react-native-webrtc';
 import CodeRunner from './src/CodeRunner';
+import { Runtime } from './src/runtime';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -25,7 +26,10 @@ export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState('idle');
-  const [currentCode, setCurrentCode] = useState<string>('');
+  // HMR: the root component is built by the module Runtime; renderVersion is
+  // bumped on every sync/patch to remount the ErrorBoundary cleanly.
+  const [rootComponent, setRootComponent] = useState<React.ComponentType | null>(null);
+  const [renderVersion, setRenderVersion] = useState(0);
   const [userId, setUserId] = useState('');
   const [orchestratorUrl, setOrchestratorUrl] = useState(getAutoUrl());
   const [isProvisioning, setIsProvisioning] = useState(false);
@@ -97,7 +101,7 @@ export default function App() {
         ws.addEventListener('message', function onFirstCode(event: MessageEvent) {
           try {
             const msg = JSON.parse(event.data);
-            if (msg.type === 'code-update' && msg.code) {
+            if ((msg.type === 'code-update' && msg.code) || msg.type === 'module-sync') {
               clearTimeout(retryTimer);
               ws.removeEventListener('message', onFirstCode);
             }
@@ -155,12 +159,33 @@ export default function App() {
             }
           }
           
-          if (msg.type === 'code-update') {
-            console.log('[Sync] Received code update, length:', msg.code?.length);
-            if (msg.code) {
-              setCurrentCode(msg.code);
+          // HMR: full module set on connect.
+          if (msg.type === 'module-sync') {
+            console.log(`[HMR] module-sync: ${Object.keys(msg.modules || {}).length} module(s)`);
+            try {
+              Runtime.sync(msg.modules || {}, msg.entry);
+              setRootComponent(() => Runtime.getRoot());
+              setRenderVersion(v => v + 1);
               setStatus('running');
-            }
+            } catch (e) { console.error('[HMR] sync failed:', e); }
+          }
+
+          // HMR: incremental patch on edit — only changed modules re-evaluate.
+          if (msg.type === 'module-patch') {
+            const changedCount = Object.keys(msg.changed || {}).length;
+            console.log(`[HMR] module-patch: ${changedCount} changed, ${(msg.removed || []).length} removed`);
+            try {
+              Runtime.patch(msg.changed || {}, msg.removed || [], msg.entry);
+              setRootComponent(() => Runtime.getRoot());
+              setRenderVersion(v => v + 1);
+              setStatus('running');
+            } catch (e) { console.error('[HMR] patch failed:', e); }
+          }
+
+          // Legacy monolithic bundle. Ignored when the HMR runtime is active so
+          // the device doesn't render twice; old app builds use this instead.
+          if (msg.type === 'code-update' && !Runtime.hasModules()) {
+            console.log('[Sync] (legacy) code-update received but HMR runtime is in use — ignoring');
           }
 
           if (msg.type === 'builder-log') {
@@ -262,8 +287,8 @@ export default function App() {
           </View>
         )}
 
-        {currentCode ? (
-          <CodeRunner code={currentCode} />
+        {status === 'running' ? (
+          <CodeRunner rootComponent={rootComponent} renderKey={renderVersion} />
         ) : (
           !isProvisioning && status !== 'idle' && (
             <View style={styles.placeholder}>
@@ -278,7 +303,8 @@ export default function App() {
            <Button title="Disconnect" onPress={() => {
              wsRef.current?.close();
              setStatus('idle');
-             setCurrentCode('');
+             setRootComponent(null);
+             setRenderVersion(0);
            }} color="#ff3b30" />
         )}
       </View>
