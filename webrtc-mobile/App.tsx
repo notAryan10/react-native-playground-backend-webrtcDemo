@@ -30,6 +30,9 @@ export default function App() {
   // bumped on every sync/patch to remount the ErrorBoundary cleanly.
   const [rootComponent, setRootComponent] = useState<React.ComponentType | null>(null);
   const [renderVersion, setRenderVersion] = useState(0);
+  // Legacy fallback: full bundle string used only when the backend doesn't
+  // send HMR modules (older server image).
+  const [currentCode, setCurrentCode] = useState<string>('');
   const [userId, setUserId] = useState('');
   const [orchestratorUrl, setOrchestratorUrl] = useState(getAutoUrl());
   const [isProvisioning, setIsProvisioning] = useState(false);
@@ -189,10 +192,14 @@ export default function App() {
             } catch (e) { console.error('[HMR] patch failed:', e); }
           }
 
-          // Legacy monolithic bundle. Ignored when the HMR runtime is active so
-          // the device doesn't render twice; old app builds use this instead.
-          if (msg.type === 'code-update' && !Runtime.hasModules()) {
-            console.log('[Sync] (legacy) code-update received but HMR runtime is in use — ignoring');
+          // Legacy monolithic bundle. The new HMR runtime is preferred, but if
+          // the backend never sends module-sync (older image), fall back to
+          // rendering this bundle so the device still works. Once HMR modules
+          // exist, code-update is ignored to avoid a double render.
+          if (msg.type === 'code-update' && msg.code && !Runtime.hasModules()) {
+            console.log('[Sync] (legacy) code-update — no HMR modules, rendering bundle');
+            setCurrentCode(msg.code);
+            setStatus('running');
           }
 
           if (msg.type === 'builder-log') {
@@ -295,7 +302,11 @@ export default function App() {
         )}
 
         {status === 'running' ? (
-          <CodeRunner rootComponent={rootComponent} renderKey={renderVersion} />
+          Runtime.hasModules() ? (
+            <CodeRunner rootComponent={rootComponent} renderKey={renderVersion} />
+          ) : (
+            <CodeRunner code={currentCode} />
+          )
         ) : (
           !isProvisioning && status !== 'idle' && (
             <View style={styles.placeholder}>
@@ -312,6 +323,7 @@ export default function App() {
              setStatus('idle');
              setRootComponent(null);
              setRenderVersion(0);
+             setCurrentCode('');
            }} color="#ff3b30" />
         )}
       </View>
