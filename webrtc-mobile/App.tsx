@@ -162,10 +162,19 @@ export default function App() {
           console.log(`[WS] Received message: ${msg.type}`);
 
           if (msg.type === 'answer') {
+            // Only apply an answer when we're actually waiting for one. A second
+            // web client (the editor's sync socket) joining makes us re-offer,
+            // and the already-connected viewer answers again; without this guard
+            // that late answer hits a 'stable' connection and throws
+            // "Called in wrong state: stable".
             if (pcRef.current) {
-              await pcRef.current.setRemoteDescription(msg.answer).catch(err => {
-                console.error('Failed to set remote description:', err);
-              });
+              if (pcRef.current.signalingState !== 'have-local-offer') {
+                console.log(`[WebRTC] Ignoring answer — not awaiting one (state: ${pcRef.current.signalingState})`);
+              } else {
+                await pcRef.current.setRemoteDescription(msg.answer).catch(err => {
+                  console.error('Failed to set remote description:', err);
+                });
+              }
             }
           }
           
