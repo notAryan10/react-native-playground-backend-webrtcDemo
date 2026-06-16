@@ -26,6 +26,11 @@ const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302';
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // Whether a root component is currently mounted. Fast Refresh can only update
+  // an already-mounted tree, so a module-patch that arrives before any
+  // module-sync (race when the editor edited before this client registered)
+  // must mount the root itself instead of trusting performReactRefresh.
+  const mountedRef = useRef(false);
   const [status, setStatus] = useState('idle');
   // HMR: the root component is built by the module Runtime; renderVersion is
   // bumped on every sync/patch to remount the ErrorBoundary cleanly.
@@ -191,7 +196,9 @@ export default function App() {
             console.log(`[HMR] module-sync: ${Object.keys(msg.modules || {}).length} module(s)`);
             try {
               Runtime.sync(msg.modules || {}, msg.entry);
-              setRootComponent(() => Runtime.getRoot());
+              const root = Runtime.getRoot();
+              setRootComponent(() => root);
+              mountedRef.current = !!root;
               setRenderVersion(v => v + 1);
               setStatus('running');
             } catch (e) { console.error('[HMR] sync failed:', e); }
@@ -203,13 +210,16 @@ export default function App() {
             console.log(`[HMR] module-patch: ${changedCount} changed, ${(msg.removed || []).length} removed`);
             try {
               const refreshed = Runtime.patch(msg.changed || {}, msg.removed || [], msg.entry);
-              if (refreshed) {
-                // Fast Refresh updated the mounted tree in place — keep state,
-                // don't remount.
+              if (refreshed && mountedRef.current) {
+                // Fast Refresh updated the already-mounted tree in place — keep
+                // state, don't remount.
                 console.log('[HMR] applied via Fast Refresh (state preserved)');
               } else {
-                // Fallback: rebuild the root and remount.
-                setRootComponent(() => Runtime.getRoot());
+                // Either Fast Refresh fell back, or nothing is mounted yet (a
+                // patch landed before any module-sync). Build and mount the root.
+                const root = Runtime.getRoot();
+                setRootComponent(() => root);
+                mountedRef.current = !!root;
                 setRenderVersion(v => v + 1);
               }
               setStatus('running');
@@ -360,6 +370,7 @@ export default function App() {
              wsRef.current?.close();
              setStatus('idle');
              setRootComponent(null);
+             mountedRef.current = false;
              setRenderVersion(0);
              setCurrentCode('');
            }} color="#ff3b30" />
