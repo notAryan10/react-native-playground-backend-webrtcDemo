@@ -245,6 +245,7 @@ export default function CodeRunner({ code, rootComponent, renderKey }: CodeRunne
 const styles = StyleSheet.create({
     runnerContainer: {
         flex: 1,
+        backgroundColor: '#fff',
     },
     placeholder: {
         flex: 1,
