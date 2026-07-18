@@ -21,7 +21,17 @@ const getAutoUrl = () => {
   return '';
 };
 
-const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302';
+// STUN alone can't relay media across symmetric NATs, so ICE connects but no
+// RTP flows and the browser sees a black screen. Add a TURN server (must match
+// the browser's) to relay media. Set EXPO_PUBLIC_TURN_* to enable.
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  ...(process.env.EXPO_PUBLIC_TURN_URL ? [{
+    urls: process.env.EXPO_PUBLIC_TURN_URL,
+    username: process.env.EXPO_PUBLIC_TURN_USERNAME,
+    credential: process.env.EXPO_PUBLIC_TURN_CREDENTIAL,
+  }] : []),
+];
 
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -132,7 +142,7 @@ export default function App() {
         });
 
         const pc = new RTCPeerConnection({
-          iceServers: [{ urls: DEFAULT_STUN_SERVER }],
+          iceServers: ICE_SERVERS,
         });
         pcRef.current = pc;
 
