@@ -36,6 +36,11 @@ const ICE_SERVERS = [
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // The screen-capture stream. Android allows only one active MediaProjection,
+  // so calling getDisplayMedia again on a reconnect throws NotAllowedError and
+  // leaves the peer connection with no video track (black screen). Capture once
+  // and reuse this stream across every reconnect/renegotiation.
+  const streamRef = useRef<MediaStream | null>(null);
   // Whether a root component is currently mounted. Fast Refresh can only update
   // an already-mounted tree, so a module-patch that arrives before any
   // module-sync (race when the editor edited before this client registered)
@@ -151,9 +156,17 @@ export default function App() {
         };
 
         try {
-          // @ts-ignore
-          const stream = await mediaDevices.getDisplayMedia({ video: true });
-          stream.getTracks().forEach((track: any) => pc.addTrack(track, stream));
+          // Reuse the existing capture if it's still live; only prompt for
+          // screen capture the first time. Re-calling getDisplayMedia on a
+          // reconnect is what threw NotAllowedError and left the pc trackless.
+          let stream = streamRef.current;
+          const live = stream && stream.getVideoTracks().some((t: any) => t.readyState === 'live');
+          if (!live) {
+            // @ts-ignore
+            stream = await mediaDevices.getDisplayMedia({ video: true });
+            streamRef.current = stream;
+          }
+          stream!.getTracks().forEach((track: any) => pc.addTrack(track, stream!));
         } catch (mediaErr) {
           console.error('Media error:', mediaErr);
         }
