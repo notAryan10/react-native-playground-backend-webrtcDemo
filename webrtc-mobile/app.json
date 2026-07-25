@@ -36,7 +36,8 @@
         "android.permission.WAKE_LOCK",
         "android.permission.BLUETOOTH",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

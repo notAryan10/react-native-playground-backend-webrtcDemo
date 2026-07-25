@@ -21,9 +21,6 @@ const getAutoUrl = () => {
   return '';
 };
 
-// STUN alone can't relay media across symmetric NATs, so ICE connects but no
-// RTP flows and the browser sees a black screen. Add a TURN server (must match
-// the browser's) to relay media. Set EXPO_PUBLIC_TURN_* to enable.
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   ...(process.env.EXPO_PUBLIC_TURN_URL ? [{
@@ -36,31 +33,18 @@ const ICE_SERVERS = [
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  // The screen-capture stream. Android allows only one active MediaProjection,
-  // so calling getDisplayMedia again on a reconnect throws NotAllowedError and
-  // leaves the peer connection with no video track (black screen). Capture once
-  // and reuse this stream across every reconnect/renegotiation.
   const streamRef = useRef<MediaStream | null>(null);
-  // Whether a root component is currently mounted. Fast Refresh can only update
-  // an already-mounted tree, so a module-patch that arrives before any
-  // module-sync (race when the editor edited before this client registered)
-  // must mount the root itself instead of trusting performReactRefresh.
+  const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(false);
   const [status, setStatus] = useState('idle');
-  // HMR: the root component is built by the module Runtime; renderVersion is
-  // bumped on every sync/patch to remount the ErrorBoundary cleanly.
   const [rootComponent, setRootComponent] = useState<React.ComponentType | null>(null);
   const [renderVersion, setRenderVersion] = useState(0);
-  // Legacy fallback: full bundle string used only when the backend doesn't
-  // send HMR modules (older server image).
   const [currentCode, setCurrentCode] = useState<string>('');
   const [userId, setUserId] = useState('');
   const [orchestratorUrl, setOrchestratorUrl] = useState(getAutoUrl());
   const [isProvisioning, setIsProvisioning] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
-  // Tap-to-source: transient highlight box drawn over the element the browser
-  // tapped on the streamed video.
   const [inspectFrame, setInspectFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
   useEffect(() => {
@@ -156,9 +140,6 @@ export default function App() {
         };
 
         try {
-          // Reuse the existing capture if it's still live; only prompt for
-          // screen capture the first time. Re-calling getDisplayMedia on a
-          // reconnect is what threw NotAllowedError and left the pc trackless.
           let stream = streamRef.current;
           const live = stream && stream.getVideoTracks().some((t: any) => t.readyState === 'live');
           if (!live) {
@@ -170,6 +151,29 @@ export default function App() {
         } catch (mediaErr) {
           console.error('Media error:', mediaErr);
         }
+
+        {
+          const vTrack = streamRef.current?.getVideoTracks?.()[0] as any;
+          console.log('[Capture] track:', vTrack
+            ? `readyState=${vTrack.readyState} enabled=${vTrack.enabled} settings=${JSON.stringify(vTrack.getSettings?.() || {})}`
+            : 'NONE');
+        }
+        if (statsTimerRef.current) clearInterval(statsTimerRef.current);
+        statsTimerRef.current = setInterval(async () => {
+          const p = pcRef.current;
+          if (!p) return;
+          try {
+            const stats = await p.getStats();
+            stats.forEach((r: any) => {
+              if (r.type === 'media-source' && r.kind === 'video') {
+                console.log(`[Capture] media-source frames=${r.frames} ${r.width}x${r.height}`);
+              }
+              if (r.type === 'outbound-rtp' && (r.kind === 'video' || r.mediaType === 'video')) {
+                console.log(`[Sender] outbound framesEncoded=${r.framesEncoded} framesSent=${r.framesSent} bytesSent=${r.bytesSent} ${r.frameWidth}x${r.frameHeight}`);
+              }
+            });
+          } catch {}
+        }, 2000);
 
         const sendOffer = async () => {
           try {
@@ -190,11 +194,6 @@ export default function App() {
           console.log(`[WS] Received message: ${msg.type}`);
 
           if (msg.type === 'answer') {
-            // Only apply an answer when we're actually waiting for one. A second
-            // web client (the editor's sync socket) joining makes us re-offer,
-            // and the already-connected viewer answers again; without this guard
-            // that late answer hits a 'stable' connection and throws
-            // "Called in wrong state: stable".
             if (pcRef.current) {
               if (pcRef.current.signalingState !== 'have-local-offer') {
                 console.log(`[WebRTC] Ignoring answer — not awaiting one (state: ${pcRef.current.signalingState})`);
@@ -227,19 +226,14 @@ export default function App() {
             } catch (e) { console.error('[HMR] sync failed:', e); }
           }
 
-          // HMR: incremental patch on edit — only changed modules re-evaluate.
           if (msg.type === 'module-patch') {
             const changedCount = Object.keys(msg.changed || {}).length;
             console.log(`[HMR] module-patch: ${changedCount} changed, ${(msg.removed || []).length} removed`);
             try {
               const refreshed = Runtime.patch(msg.changed || {}, msg.removed || [], msg.entry);
-              if (refreshed && mountedRef.current) {
-                // Fast Refresh updated the already-mounted tree in place — keep
-                // state, don't remount.
+              if (refreshed && mountedRef.current) {.
                 console.log('[HMR] applied via Fast Refresh (state preserved)');
               } else {
-                // Either Fast Refresh fell back, or nothing is mounted yet (a
-                // patch landed before any module-sync). Build and mount the root.
                 const root = Runtime.getRoot();
                 setRootComponent(() => root);
                 mountedRef.current = !!root;
@@ -249,10 +243,6 @@ export default function App() {
             } catch (e) { console.error('[HMR] patch failed:', e); }
           }
 
-          // Legacy monolithic bundle. The new HMR runtime is preferred, but if
-          // the backend never sends module-sync (older image), fall back to
-          // rendering this bundle so the device still works. Once HMR modules
-          // exist, code-update is ignored to avoid a double render.
           if (msg.type === 'code-update' && msg.code && !Runtime.hasModules()) {
             console.log('[Sync] (legacy) code-update — no HMR modules, rendering bundle');
             setCurrentCode(msg.code);
@@ -263,7 +253,6 @@ export default function App() {
             console.log(`[Builder][${msg.level}] ${msg.message}`);
           }
 
-          // Tap-to-source: hit-test the tapped point and report the source back.
           if (msg.type === 'inspect-at') {
             const result = await inspectAt(msg.x, msg.y);
             if (ws.readyState === WebSocket.OPEN) {
