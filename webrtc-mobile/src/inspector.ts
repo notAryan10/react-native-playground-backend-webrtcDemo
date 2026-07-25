@@ -111,9 +111,7 @@ export function inspectAt(xRatio: number, yRatio: number): Promise<InspectResult
   return new Promise((resolve) => {
     if (!getInspectorDataForViewAtPoint || !rootRef) return resolve(EMPTY);
 
-    const run = (width: number, height: number) => {
-      const locationX = Math.max(0, Math.min(1, xRatio)) * width;
-      const locationY = Math.max(0, Math.min(1, yRatio)) * height;
+    const run = (locationX: number, locationY: number) => {
       try {
         getInspectorDataForViewAtPoint(rootRef, locationX, locationY, (viewData: any) => {
           try {
@@ -152,19 +150,22 @@ export function inspectAt(xRatio: number, yRatio: number): Promise<InspectResult
       }
     };
 
-    // Measure the root so ratios map onto its real on-screen size; fall back to
-    // window dimensions if measure is unavailable.
+    // The streamed video is a full-screen capture (it includes the status/nav
+    // bars), so the incoming ratio is a fraction of the whole display. Scale it
+    // to the screen, then subtract the root view's on-screen offset (pageX/pageY)
+    // to get a point in the root's own coordinate space. Without this, every tap
+    // lands below where the user clicked by the height of the status bar.
+    const cx = Math.max(0, Math.min(1, xRatio));
+    const cy = Math.max(0, Math.min(1, yRatio));
+    const screen = Dimensions.get('screen');
     if (typeof rootRef.measure === 'function') {
-      rootRef.measure((_x: number, _y: number, width: number, height: number) => {
-        if (width && height) run(width, height);
-        else {
-          const d = Dimensions.get('window');
-          run(d.width, d.height);
-        }
+      rootRef.measure((_x: number, _y: number, w: number, h: number, pageX: number, pageY: number) => {
+        const sw = screen.width || w;
+        const sh = screen.height || h;
+        run(cx * sw - (pageX || 0), cy * sh - (pageY || 0));
       });
     } else {
-      const d = Dimensions.get('window');
-      run(d.width, d.height);
+      run(cx * screen.width, cy * screen.height);
     }
   });
 }
