@@ -78,7 +78,8 @@
           "color": "#ffffff"
         }
       ],
-      "expo-av"
+      "expo-av",
+      "./plugins/withMediaProjectionCapture.js"
     ],
     "extra": {
       "eas": {

@@ -34,7 +34,6 @@ export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const statsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(false);
   const [status, setStatus] = useState('idle');
   const [rootComponent, setRootComponent] = useState<React.ComponentType | null>(null);
@@ -152,29 +151,6 @@ export default function App() {
           console.error('Media error:', mediaErr);
         }
 
-        {
-          const vTrack = streamRef.current?.getVideoTracks?.()[0] as any;
-          console.log('[Capture] track:', vTrack
-            ? `readyState=${vTrack.readyState} enabled=${vTrack.enabled} settings=${JSON.stringify(vTrack.getSettings?.() || {})}`
-            : 'NONE');
-        }
-        if (statsTimerRef.current) clearInterval(statsTimerRef.current);
-        statsTimerRef.current = setInterval(async () => {
-          const p = pcRef.current;
-          if (!p) return;
-          try {
-            const stats = await p.getStats();
-            stats.forEach((r: any) => {
-              if (r.type === 'media-source' && r.kind === 'video') {
-                console.log(`[Capture] media-source frames=${r.frames} ${r.width}x${r.height}`);
-              }
-              if (r.type === 'outbound-rtp' && (r.kind === 'video' || r.mediaType === 'video')) {
-                console.log(`[Sender] outbound framesEncoded=${r.framesEncoded} framesSent=${r.framesSent} bytesSent=${r.bytesSent} ${r.frameWidth}x${r.frameHeight}`);
-              }
-            });
-          } catch {}
-        }, 2000);
-
         const sendOffer = async () => {
           try {
             const offer = await pc.createOffer();
@@ -231,7 +207,7 @@ export default function App() {
             console.log(`[HMR] module-patch: ${changedCount} changed, ${(msg.removed || []).length} removed`);
             try {
               const refreshed = Runtime.patch(msg.changed || {}, msg.removed || [], msg.entry);
-              if (refreshed && mountedRef.current) {.
+              if (refreshed && mountedRef.current) {
                 console.log('[HMR] applied via Fast Refresh (state preserved)');
               } else {
                 const root = Runtime.getRoot();
