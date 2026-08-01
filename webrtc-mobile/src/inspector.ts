@@ -37,6 +37,28 @@ export function setInspectRoot(ref: any) {
   rootRef = ref;
 }
 
+// The sub-view the browser actually shows. getDisplayMedia can only capture the
+// whole display, so the device reports this rect (normalized to the screen) and
+// the browser crops the video to it — everything outside (status bar, app header,
+// controls) is hidden.
+// ponytail: crop is cosmetic, the full screen is still encoded and sent. Move to
+// a real single-app capture only if the off-crop pixels ever matter (privacy/bandwidth).
+let captureRef: any = null;
+export function setCaptureView(ref: any) {
+  captureRef = ref;
+}
+
+export function measureCaptureRect(): Promise<{ x: number; y: number; w: number; h: number } | null> {
+  return new Promise((resolve) => {
+    if (!captureRef || typeof captureRef.measure !== 'function') return resolve(null);
+    const s = Dimensions.get('screen');
+    captureRef.measure((_x: number, _y: number, w: number, h: number, px: number, py: number) => {
+      if (!w || !h || !s.width || !s.height) return resolve(null);
+      resolve({ x: px / s.width, y: py / s.height, w: w / s.width, h: h / s.height });
+    });
+  });
+}
+
 // Listener so App can paint a transient highlight box at the hit frame.
 type FrameListener = (frame: InspectResult['frame']) => void;
 let frameListener: FrameListener | null = null;
@@ -150,19 +172,31 @@ export function inspectAt(xRatio: number, yRatio: number): Promise<InspectResult
       }
     };
 
-    // The streamed video is a full-screen capture (it includes the status/nav
-    // bars), so the incoming ratio is a fraction of the whole display. Scale it
-    // to the screen, then subtract the root view's on-screen offset (pageX/pageY)
-    // to get a point in the root's own coordinate space. Without this, every tap
-    // lands below where the user clicked by the height of the status bar.
+    // The browser crops the stream to the capture view, so an incoming ratio is a
+    // fraction of THAT view, not of the display. Map it into page coordinates via
+    // the capture view's own rect, then subtract the root's offset to land in the
+    // root's coordinate space (which is what the hit-test expects).
     const cx = Math.max(0, Math.min(1, xRatio));
     const cy = Math.max(0, Math.min(1, yRatio));
     const screen = Dimensions.get('screen');
-    if (typeof rootRef.measure === 'function') {
+    if (captureRef && typeof captureRef.measure === 'function' && typeof rootRef.measure === 'function') {
+      captureRef.measure((_cx: number, _cy: number, cw: number, ch: number, cpx: number, cpy: number) => {
+        rootRef.measure((_x: number, _y: number, _w: number, _h: number, rpx: number, rpy: number) => {
+          run(cpx + cx * cw - (rpx || 0), cpy + cy * ch - (rpy || 0));
+        });
+      });
+    } else if (typeof rootRef.measure === 'function') {
       rootRef.measure((_x: number, _y: number, w: number, h: number, pageX: number, pageY: number) => {
         const sw = screen.width || w;
         const sh = screen.height || h;
-        run(cx * sw - (pageX || 0), cy * sh - (pageY || 0));
+        const lx = cx * sw - (pageX || 0);
+        const ly = cy * sh - (pageY || 0);
+        console.log('[InspectDbg] incomingRatio=', JSON.stringify({ x: xRatio, y: yRatio }),
+          'measure=', JSON.stringify({ w, h, pageX, pageY }),
+          'screen=', JSON.stringify(screen),
+          'window=', JSON.stringify(Dimensions.get('window')),
+          'final=', JSON.stringify({ lx, ly }));
+        run(lx, ly);
       });
     } else {
       run(cx * screen.width, cy * screen.height);
