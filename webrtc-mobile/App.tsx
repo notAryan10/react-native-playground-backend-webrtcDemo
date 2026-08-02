@@ -65,6 +65,7 @@ export default function App() {
   const [showScanner, setShowScanner] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const [inspectFrame, setInspectFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [chromeVisible, setChromeVisible] = useState(false);
 
   // Closing the socket is not enough to stop streaming: the peer connection is
   // already negotiated and keeps pushing media, and the capture tracks keep
@@ -378,12 +379,33 @@ export default function App() {
     );
   }
 
+  // Once code is running the device is a preview surface, so the app's own
+  // chrome is just noise in the stream. Hide it and let the user's component
+  // have the whole screen. Three-finger tap brings it back.
+  const running = status === 'running';
+  const showChrome = !running || chromeVisible;
+
   return (
-    <View style={styles.container} ref={(r) => setInspectRoot(r)}>
-      <View style={styles.header}>
-        <Text style={styles.title}>📡 Runtime Exec</Text>
-        <Text style={styles.status}>Status: {status}</Text>
-      </View>
+    <View
+      style={styles.container}
+      ref={(r) => setInspectRoot(r)}
+      // Three-finger tap reveals the Disconnect bar while code is running.
+      // Claiming it in the capture phase means the root gets first refusal on
+      // every touch, but it only steals the gesture once a third finger is
+      // down — one- and two-finger touches go straight to the user's component,
+      // so normal taps, scrolls and pinches are unaffected.
+      onStartShouldSetResponderCapture={(e) =>
+        running && e.nativeEvent.touches.length >= 3
+      }
+      onResponderRelease={() => setChromeVisible((v) => !v)}
+    >
+      {showChrome && (
+        <View style={styles.header}>
+          <Text style={styles.title}>📡 Runtime Exec</Text>
+          <Text style={styles.status}>Status: {status}</Text>
+          {running && <Text style={styles.status}>Three-finger tap to hide</Text>}
+        </View>
+      )}
 
       <View style={styles.previewContainer}>
         {(status === 'idle' || status === 'error') && !isProvisioning ? (
@@ -424,11 +446,13 @@ export default function App() {
         )}
       </View>
 
+      {showChrome && (
       <View style={styles.controls}>
         {status !== 'idle' && status !== 'error' && (
            <Button title="Disconnect" onPress={() => {
              wsRef.current?.close();
              stopCapture();
+             setChromeVisible(false);
              setStatus('idle');
              setRootComponent(null);
              mountedRef.current = false;
@@ -437,6 +461,7 @@ export default function App() {
            }} color="#ff3b30" />
         )}
       </View>
+      )}
 
       {inspectFrame && (
         <View
