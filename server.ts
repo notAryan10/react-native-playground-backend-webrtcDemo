@@ -708,8 +708,11 @@ signalingWss.on("connection", (ws: WebSocket) => {
 
   ws.on("close", () => {
     console.log(`Client disconnected: ${clientId}`);
+    // Carry the type out with the notice: the web viewer needs to know it was
+    // the mobile that left (its video is now dead) and not another browser tab.
+    const clientType = clients.get(clientId)?.type;
     clients.delete(clientId);
-    broadcastToOthers(clientId, { type: 'client-disconnected', clientId });
+    broadcastToOthers(clientId, { type: 'client-disconnected', clientId, clientType });
   });
 });
 
