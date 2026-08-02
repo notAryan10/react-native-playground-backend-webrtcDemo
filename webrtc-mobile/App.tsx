@@ -3,6 +3,7 @@ import { View, Text, Button, StyleSheet, TextInput, ActivityIndicator } from 're
 import {
   RTCPeerConnection,
   mediaDevices,
+  MediaStream,
 } from 'react-native-webrtc';
 import CodeRunner from './src/CodeRunner';
 import { Runtime } from './src/runtime';
@@ -21,18 +22,30 @@ const getAutoUrl = () => {
   return '';
 };
 
+// These must stay written as literal `process.env.EXPO_PUBLIC_*` member
+// expressions: babel-preset-expo replaces exactly that shape with a string at
+// build time, so destructuring or aliasing process.env would leave the TURN
+// config undefined on device. Expo's own type for process.env does not declare
+// them, hence the suppressions — they are @ts-expect-error rather than
+// @ts-ignore so they fail loudly once a future Expo release types these.
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
+  // @ts-expect-error EXPO_PUBLIC_* is inlined at build time, not typed
   ...(process.env.EXPO_PUBLIC_TURN_URL ? [{
-    urls: process.env.EXPO_PUBLIC_TURN_URL,
-    username: process.env.EXPO_PUBLIC_TURN_USERNAME,
-    credential: process.env.EXPO_PUBLIC_TURN_CREDENTIAL,
+    // @ts-expect-error see above
+    urls: process.env.EXPO_PUBLIC_TURN_URL as string,
+    // @ts-expect-error see above
+    username: process.env.EXPO_PUBLIC_TURN_USERNAME as string,
+    // @ts-expect-error see above
+    credential: process.env.EXPO_PUBLIC_TURN_CREDENTIAL as string,
   }] : []),
 ];
 
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  // react-native-webrtc's MediaStream, not the DOM one the global lib provides:
+  // getDisplayMedia returns the former and pc.addTrack only accepts the former.
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(false);
   const [status, setStatus] = useState('idle');
@@ -121,6 +134,10 @@ export default function App() {
       const SIGNALING_URL = data.url;
       setIsProvisioning(false);
 
+      // Same for the socket: Reconnect while one is already open would leave the
+      // old one connected, so the server would count two mobile clients.
+      wsRef.current?.close();
+
       const ws = new WebSocket(SIGNALING_URL);
       wsRef.current = ws;
 
@@ -146,6 +163,13 @@ export default function App() {
           } catch {}
         });
 
+        // Reconnecting builds a fresh peer connection, so retire the previous
+        // one first — otherwise each Reconnect strands a live pc and its ICE
+        // agent, still holding transceivers for the same capture tracks.
+        // The capture stream itself is deliberately left running; re-acquiring
+        // it would re-prompt for the screen recording permission.
+        pcRef.current?.close();
+
         const pc = new RTCPeerConnection({
           iceServers: ICE_SERVERS,
         });
@@ -159,8 +183,9 @@ export default function App() {
           let stream = streamRef.current;
           const live = stream && stream.getVideoTracks().some((t: any) => t.readyState === 'live');
           if (!live) {
-            // @ts-ignore
-            stream = await mediaDevices.getDisplayMedia({ video: true });
+            // Takes no constraints — react-native-webrtc's getDisplayMedia
+            // ignores them; the old `{ video: true }` argument was discarded.
+            stream = await mediaDevices.getDisplayMedia();
             streamRef.current = stream;
           }
           stream!.getTracks().forEach((track: any) => pc.addTrack(track, stream!));
