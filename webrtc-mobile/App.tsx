@@ -41,6 +41,13 @@ const ICE_SERVERS = [
   }] : []),
 ];
 
+// Screen-share encoder budget. Measured before capping: ~59 fps at the native
+// 1072x2336, for a preview the browser draws at roughly 254x554. These are the
+// tuning knobs — raise them if animation-heavy previews look choppy, lower them
+// if the device runs hot on long sessions.
+const PREVIEW_MAX_FPS = 20;
+const PREVIEW_SCALE_DOWN = 2;
+
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -143,7 +150,10 @@ export default function App() {
 
       ws.onopen = async () => {
         setStatus('connected');
-        ws.send(JSON.stringify({ type: 'register', clientType: 'mobile' }));
+        // supportsHmr tells the server this client applies `module-patch`, so it
+        // can stop also sending the full bundle on every edit — this app parses
+        // and discards it (see the Runtime.hasModules() guard on code-update).
+        ws.send(JSON.stringify({ type: 'register', clientType: 'mobile', supportsHmr: true }));
 
         // If no code arrives within 4 seconds, request the current bundle explicitly.
         // This handles the case where rebundle ran before this client registered.
@@ -189,6 +199,26 @@ export default function App() {
             streamRef.current = stream;
           }
           stream!.getTracks().forEach((track: any) => pc.addTrack(track, stream!));
+
+          // Cap the encoder. getDisplayMedia takes no constraints, so this is
+          // the only place to ask for less than the full-rate, full-resolution
+          // capture: a code preview is near-static and the browser renders it
+          // in a panel a few hundred px wide, so encoding every frame at native
+          // resolution just burns battery and heats the device.
+          try {
+            const sender = pc.getSenders().find((s: any) => s.track && s.track.kind === 'video');
+            const params = sender && sender.getParameters();
+            if (params && params.encodings && params.encodings.length) {
+              params.encodings.forEach((e: any) => {
+                e.maxFramerate = PREVIEW_MAX_FPS;
+                e.scaleResolutionDownBy = PREVIEW_SCALE_DOWN;
+              });
+              await sender!.setParameters(params);
+            }
+          } catch (encErr) {
+            // Non-fatal: an uncapped stream still works, just costs more.
+            console.warn('Could not cap encoder params:', encErr);
+          }
         } catch (mediaErr) {
           console.error('Media error:', mediaErr);
         }

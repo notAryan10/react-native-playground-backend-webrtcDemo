@@ -385,6 +385,18 @@ interface Client {
   ws: WebSocket;
   id: string;
   type: 'mobile' | 'web';
+  // Set by clients that apply `module-patch`. They ignore `code-update`, so
+  // sending it to them means stringifying, proxying and JSON.parsing the whole
+  // bundle on every edit just for the device to throw it away. Absent on older
+  // clients, which still need the full bundle.
+  supportsHmr?: boolean;
+}
+
+// A client can only be spared the full bundle if there are modules to patch
+// against; with an empty registry `module-sync` sends nothing and the bundle is
+// the only way it gets any code at all.
+function needsFullBundle(client: { supportsHmr?: boolean } | undefined): boolean {
+  return !(client?.supportsHmr && Object.keys(moduleRegistry).length > 0);
 }
 
 const clients: Map<string, Client> = new Map();
@@ -481,9 +493,12 @@ function rebundle() {
     clients.forEach((client) => {
       if (client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
         // New HMR client gets the minimal patch; legacy client uses code-update.
-        // Both are sent — each app handles only the message type it understands.
+        // Only one or the other: sending both meant the whole bundle crossed the
+        // wire on every edit for HMR clients, which parse it and drop it.
         client.ws.send(JSON.stringify({ type: 'module-patch', changed, removed, entry: ENTRY_POINT }));
-        client.ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+        if (needsFullBundle(client)) {
+          client.ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+        }
         mobileCount++;
       }
     });
@@ -532,7 +547,7 @@ signalingWss.on("connection", (ws: WebSocket) => {
       switch (data.type) {
         case 'register':
           const clientType = data.clientType || 'web';
-          clients.set(clientId, { ws, id: clientId, type: clientType });
+          clients.set(clientId, { ws, id: clientId, type: clientType, supportsHmr: data.supportsHmr === true });
           console.log(`Client ${clientId} registered as ${clientType}`);
           
           // On mobile join: send full HMR module set (new app) + latest bundle
@@ -541,8 +556,14 @@ signalingWss.on("connection", (ws: WebSocket) => {
             sendModuleSync(ws);
             const codeToSend = currentBundle ?? currentCode;
             if (codeToSend) {
-              console.log(`[Sync] Sending ${currentBundle ? 'bundle' : 'legacy code'} to: ${clientId}`);
-              ws.send(JSON.stringify({ type: 'code-update', code: codeToSend }));
+              // An HMR client already has everything it needs from module-sync;
+              // the bundle would only be parsed and dropped.
+              if (needsFullBundle(clients.get(clientId))) {
+                console.log(`[Sync] Sending ${currentBundle ? 'bundle' : 'legacy code'} to: ${clientId}`);
+                ws.send(JSON.stringify({ type: 'code-update', code: codeToSend }));
+              } else {
+                console.log(`[Sync] ${clientId} applies HMR patches — skipping full bundle`);
+              }
             } else {
               // No bundle yet — ask all connected web clients to resync their files immediately
               console.log(`[Sync] Mobile joined but no bundle — requesting file resync from ${clients.size} web client(s)`);
@@ -651,7 +672,9 @@ signalingWss.on("connection", (ws: WebSocket) => {
           if (currentBundle) {
             console.log(`[Sync] Mobile ${clientId} requested bundle — sending (${currentBundle.length} bytes)`);
             sendModuleSync(ws);
-            ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+            if (needsFullBundle(clients.get(clientId))) {
+              ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+            }
             moduleBundles.forEach((code, name) => {
               ws.send(JSON.stringify({ type: 'module-bundle', name, code }));
             });
@@ -661,7 +684,9 @@ signalingWss.on("connection", (ws: WebSocket) => {
             // If rebundle succeeded, currentBundle is now set — send it directly to this client
             if (currentBundle) {
               sendModuleSync(ws);
-              ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+              if (needsFullBundle(clients.get(clientId))) {
+                ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
+              }
             }
           } else {
             console.log(`[Sync] Mobile ${clientId} requested bundle — no files yet`);
