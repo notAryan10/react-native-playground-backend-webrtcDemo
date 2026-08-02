@@ -46,10 +46,27 @@ export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const [inspectFrame, setInspectFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
+  // Closing the socket is not enough to stop streaming: the peer connection is
+  // already negotiated and keeps pushing media, and the capture tracks keep
+  // MediaProjection (and its recording notification) alive. Both have to be
+  // torn down explicitly.
+  //
+  // ponytail: deliberately not called from ws.onclose — a transient network
+  // drop would then cost the user a re-grant of the screen capture permission.
+  // Explicit disconnect and unmount only.
+  const stopCapture = () => {
+    pcRef.current?.close();
+    pcRef.current = null;
+    streamRef.current?.getTracks().forEach((t: any) => t.stop());
+    streamRef.current = null;
+  };
+
   useEffect(() => {
     onInspectFrame((frame) => setInspectFrame(frame && frame.width ? frame : null));
     return () => onInspectFrame(null);
   }, []);
+
+  useEffect(() => stopCapture, []);
 
   useEffect(() => {
     if (!inspectFrame) return;
@@ -356,6 +373,7 @@ export default function App() {
         {status !== 'idle' && status !== 'error' && (
            <Button title="Disconnect" onPress={() => {
              wsRef.current?.close();
+             stopCapture();
              setStatus('idle');
              setRootComponent(null);
              mountedRef.current = false;
