@@ -150,30 +150,13 @@ export function inspectAt(xRatio: number, yRatio: number): Promise<InspectResult
       }
     };
 
-    // The streamed video is a MediaProjection capture of the whole display, so
-    // the incoming ratio is a fraction of `Dimensions.get('screen')` (that is
-    // Display.getRealMetrics, bars included). Scale it up, then subtract where
-    // the inspect root actually sits on that display.
-    //
-    // Getting that offset takes two terms, and neither one alone is it:
-    //
-    //   `measure` pageX/pageY are relative to the RN root — for the inspect root
-    //   itself they are always 0, which is why the old correction here was a
-    //   silent no-op and every tap hit-tested a status bar below the click.
-    //
-    //   `measureInWindow` is relative to the *visible window frame*, which on
-    //   Android already has the system bars carved out of it, so it reports 0
-    //   for an inset root too (and a negative y for an edge-to-edge one).
-    //
-    // StatusBar.currentHeight supplies the missing piece: the window's own top
-    // system inset (statusBars|navigationBars|displayCutout) in dp. Adding the
-    // two is correct either way — inset root: 0 + 24; edge-to-edge root: -24 + 24.
+    // Ratio is a fraction of the whole display; subtract where the inspect
+    // root sits on it. Needs both terms: measure() pageY is root-relative
+    // (always 0 here) and measureInWindow is relative to the inset window.
     const cx = Math.max(0, Math.min(1, xRatio));
     const cy = Math.max(0, Math.min(1, yRatio));
     const screen = Dimensions.get('screen');
     const topInset = Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0;
-    // ponytail: no left inset term. Only bites in landscape with a side cutout;
-    // add the matching WindowInsets left value if that ever shows up.
     if (typeof rootRef.measureInWindow === 'function') {
       rootRef.measureInWindow((wx: number, wy: number, w: number, h: number) => {
         run(cx * (screen.width || w) - (wx || 0), cy * (screen.height || h) - ((wy || 0) + topInset));
