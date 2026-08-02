@@ -385,16 +385,9 @@ interface Client {
   ws: WebSocket;
   id: string;
   type: 'mobile' | 'web';
-  // Set by clients that apply `module-patch`. They ignore `code-update`, so
-  // sending it to them means stringifying, proxying and JSON.parsing the whole
-  // bundle on every edit just for the device to throw it away. Absent on older
-  // clients, which still need the full bundle.
   supportsHmr?: boolean;
 }
 
-// A client can only be spared the full bundle if there are modules to patch
-// against; with an empty registry `module-sync` sends nothing and the bundle is
-// the only way it gets any code at all.
 function needsFullBundle(client: { supportsHmr?: boolean } | undefined): boolean {
   return !(client?.supportsHmr && Object.keys(moduleRegistry).length > 0);
 }
@@ -493,8 +486,6 @@ function rebundle() {
     clients.forEach((client) => {
       if (client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
         // New HMR client gets the minimal patch; legacy client uses code-update.
-        // Only one or the other: sending both meant the whole bundle crossed the
-        // wire on every edit for HMR clients, which parse it and drop it.
         client.ws.send(JSON.stringify({ type: 'module-patch', changed, removed, entry: ENTRY_POINT }));
         if (needsFullBundle(client)) {
           client.ws.send(JSON.stringify({ type: 'code-update', code: currentBundle }));
@@ -556,8 +547,6 @@ signalingWss.on("connection", (ws: WebSocket) => {
             sendModuleSync(ws);
             const codeToSend = currentBundle ?? currentCode;
             if (codeToSend) {
-              // An HMR client already has everything it needs from module-sync;
-              // the bundle would only be parsed and dropped.
               if (needsFullBundle(clients.get(clientId))) {
                 console.log(`[Sync] Sending ${currentBundle ? 'bundle' : 'legacy code'} to: ${clientId}`);
                 ws.send(JSON.stringify({ type: 'code-update', code: codeToSend }));
@@ -733,8 +722,6 @@ signalingWss.on("connection", (ws: WebSocket) => {
 
   ws.on("close", () => {
     console.log(`Client disconnected: ${clientId}`);
-    // Carry the type out with the notice: the web viewer needs to know it was
-    // the mobile that left (its video is now dead) and not another browser tab.
     const clientType = clients.get(clientId)?.type;
     clients.delete(clientId);
     broadcastToOthers(clientId, { type: 'client-disconnected', clientId, clientType });

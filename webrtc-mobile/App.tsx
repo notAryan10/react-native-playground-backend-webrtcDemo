@@ -22,12 +22,6 @@ const getAutoUrl = () => {
   return '';
 };
 
-// These must stay written as literal `process.env.EXPO_PUBLIC_*` member
-// expressions: babel-preset-expo replaces exactly that shape with a string at
-// build time, so destructuring or aliasing process.env would leave the TURN
-// config undefined on device. Expo's own type for process.env does not declare
-// them, hence the suppressions — they are @ts-expect-error rather than
-// @ts-ignore so they fail loudly once a future Expo release types these.
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   // @ts-expect-error EXPO_PUBLIC_* is inlined at build time, not typed
@@ -41,18 +35,12 @@ const ICE_SERVERS = [
   }] : []),
 ];
 
-// Screen-share encoder budget. Measured before capping: ~59 fps at the native
-// 1072x2336, for a preview the browser draws at roughly 254x554. These are the
-// tuning knobs — raise them if animation-heavy previews look choppy, lower them
-// if the device runs hot on long sessions.
 const PREVIEW_MAX_FPS = 20;
 const PREVIEW_SCALE_DOWN = 2;
 
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  // react-native-webrtc's MediaStream, not the DOM one the global lib provides:
-  // getDisplayMedia returns the former and pc.addTrack only accepts the former.
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(false);
   const [status, setStatus] = useState('idle');
@@ -66,15 +54,8 @@ export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const [inspectFrame, setInspectFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [chromeVisible, setChromeVisible] = useState(false);
+  const gestureArmedRef = useRef(true);
 
-  // Closing the socket is not enough to stop streaming: the peer connection is
-  // already negotiated and keeps pushing media, and the capture tracks keep
-  // MediaProjection (and its recording notification) alive. Both have to be
-  // torn down explicitly.
-  //
-  // ponytail: deliberately not called from ws.onclose — a transient network
-  // drop would then cost the user a re-grant of the screen capture permission.
-  // Explicit disconnect and unmount only.
   const stopCapture = () => {
     pcRef.current?.close();
     pcRef.current = null;
@@ -142,8 +123,6 @@ export default function App() {
       const SIGNALING_URL = data.url;
       setIsProvisioning(false);
 
-      // Same for the socket: Reconnect while one is already open would leave the
-      // old one connected, so the server would count two mobile clients.
       wsRef.current?.close();
 
       const ws = new WebSocket(SIGNALING_URL);
@@ -151,9 +130,6 @@ export default function App() {
 
       ws.onopen = async () => {
         setStatus('connected');
-        // supportsHmr tells the server this client applies `module-patch`, so it
-        // can stop also sending the full bundle on every edit — this app parses
-        // and discards it (see the Runtime.hasModules() guard on code-update).
         ws.send(JSON.stringify({ type: 'register', clientType: 'mobile', supportsHmr: true }));
 
         // If no code arrives within 4 seconds, request the current bundle explicitly.
@@ -174,11 +150,6 @@ export default function App() {
           } catch {}
         });
 
-        // Reconnecting builds a fresh peer connection, so retire the previous
-        // one first — otherwise each Reconnect strands a live pc and its ICE
-        // agent, still holding transceivers for the same capture tracks.
-        // The capture stream itself is deliberately left running; re-acquiring
-        // it would re-prompt for the screen recording permission.
         pcRef.current?.close();
 
         const pc = new RTCPeerConnection({
@@ -194,18 +165,11 @@ export default function App() {
           let stream = streamRef.current;
           const live = stream && stream.getVideoTracks().some((t: any) => t.readyState === 'live');
           if (!live) {
-            // Takes no constraints — react-native-webrtc's getDisplayMedia
-            // ignores them; the old `{ video: true }` argument was discarded.
             stream = await mediaDevices.getDisplayMedia();
             streamRef.current = stream;
           }
           stream!.getTracks().forEach((track: any) => pc.addTrack(track, stream!));
 
-          // Cap the encoder. getDisplayMedia takes no constraints, so this is
-          // the only place to ask for less than the full-rate, full-resolution
-          // capture: a code preview is near-static and the browser renders it
-          // in a panel a few hundred px wide, so encoding every frame at native
-          // resolution just burns battery and heats the device.
           try {
             const sender = pc.getSenders().find((s: any) => s.track && s.track.kind === 'video');
             const params = sender && sender.getParameters();
@@ -217,7 +181,6 @@ export default function App() {
               await sender!.setParameters(params);
             }
           } catch (encErr) {
-            // Non-fatal: an uncapped stream still works, just costs more.
             console.warn('Could not cap encoder params:', encErr);
           }
         } catch (mediaErr) {
@@ -379,9 +342,6 @@ export default function App() {
     );
   }
 
-  // Once code is running the device is a preview surface, so the app's own
-  // chrome is just noise in the stream. Hide it and let the user's component
-  // have the whole screen. Three-finger tap brings it back.
   const running = status === 'running';
   const showChrome = !running || chromeVisible;
 
@@ -389,15 +349,15 @@ export default function App() {
     <View
       style={styles.container}
       ref={(r) => setInspectRoot(r)}
-      // Three-finger tap reveals the Disconnect bar while code is running.
-      // Claiming it in the capture phase means the root gets first refusal on
-      // every touch, but it only steals the gesture once a third finger is
-      // down — one- and two-finger touches go straight to the user's component,
-      // so normal taps, scrolls and pinches are unaffected.
-      onStartShouldSetResponderCapture={(e) =>
-        running && e.nativeEvent.touches.length >= 3
-      }
-      onResponderRelease={() => setChromeVisible((v) => !v)}
+      onTouchStart={(e) => {
+        if (running && e.nativeEvent.touches.length >= 3 && gestureArmedRef.current) {
+          gestureArmedRef.current = false;
+          setChromeVisible((v) => !v);
+        }
+      }}
+      onTouchEnd={(e) => {
+        if (e.nativeEvent.touches.length === 0) gestureArmedRef.current = true;
+      }}
     >
       {showChrome && (
         <View style={styles.header}>
