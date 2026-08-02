@@ -1,4 +1,4 @@
-import { findNodeHandle, Dimensions } from 'react-native';
+import { findNodeHandle, Dimensions, Platform, StatusBar } from 'react-native';
 
 // Tap-to-source inspector. A web client taps the streamed device video and
 // sends a normalized [0,1] coordinate; we hit-test the on-device view tree at
@@ -150,22 +150,42 @@ export function inspectAt(xRatio: number, yRatio: number): Promise<InspectResult
       }
     };
 
-    // The streamed video is a full-screen capture (it includes the status/nav
-    // bars), so the incoming ratio is a fraction of the whole display. Scale it
-    // to the screen, then subtract the root view's on-screen offset (pageX/pageY)
-    // to get a point in the root's own coordinate space. Without this, every tap
-    // lands below where the user clicked by the height of the status bar.
+    // The streamed video is a MediaProjection capture of the whole display, so
+    // the incoming ratio is a fraction of `Dimensions.get('screen')` (that is
+    // Display.getRealMetrics, bars included). Scale it up, then subtract where
+    // the inspect root actually sits on that display.
+    //
+    // Getting that offset takes two terms, and neither one alone is it:
+    //
+    //   `measure` pageX/pageY are relative to the RN root — for the inspect root
+    //   itself they are always 0, which is why the old correction here was a
+    //   silent no-op and every tap hit-tested a status bar below the click.
+    //
+    //   `measureInWindow` is relative to the *visible window frame*, which on
+    //   Android already has the system bars carved out of it, so it reports 0
+    //   for an inset root too (and a negative y for an edge-to-edge one).
+    //
+    // StatusBar.currentHeight supplies the missing piece: the window's own top
+    // system inset (statusBars|navigationBars|displayCutout) in dp. Adding the
+    // two is correct either way — inset root: 0 + 24; edge-to-edge root: -24 + 24.
     const cx = Math.max(0, Math.min(1, xRatio));
     const cy = Math.max(0, Math.min(1, yRatio));
     const screen = Dimensions.get('screen');
-    if (typeof rootRef.measure === 'function') {
-      rootRef.measure((_x: number, _y: number, w: number, h: number, pageX: number, pageY: number) => {
-        const sw = screen.width || w;
-        const sh = screen.height || h;
-        run(cx * sw - (pageX || 0), cy * sh - (pageY || 0));
+    const topInset = Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0;
+    // ponytail: no left inset term. Only bites in landscape with a side cutout;
+    // add the matching WindowInsets left value if that ever shows up.
+    if (typeof rootRef.measureInWindow === 'function') {
+      rootRef.measureInWindow((wx: number, wy: number, w: number, h: number) => {
+        const lx = cx * (screen.width || w) - (wx || 0);
+        const ly = cy * (screen.height || h) - ((wy || 0) + topInset);
+        console.log('[InspectDbg]', 'ratio=', JSON.stringify({ cx: +cx.toFixed(4), cy: +cy.toFixed(4) }),
+          'inWindow=', JSON.stringify({ wx, wy, w, h }),
+          'screen=', JSON.stringify(screen), 'topInset=', topInset,
+          'point=', JSON.stringify({ lx: Math.round(lx), ly: Math.round(ly) }));
+        run(lx, ly);
       });
     } else {
-      run(cx * screen.width, cy * screen.height);
+      run(cx * screen.width, cy * screen.height - topInset);
     }
   });
 }
