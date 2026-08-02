@@ -66,6 +66,9 @@ export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const [inspectFrame, setInspectFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [chromeVisible, setChromeVisible] = useState(false);
+  // Re-armed only once every finger is off the screen, so one three-finger tap
+  // is one toggle no matter how many fingers land.
+  const gestureArmedRef = useRef(true);
 
   // Closing the socket is not enough to stop streaming: the peer connection is
   // already negotiated and keeps pushing media, and the capture tracks keep
@@ -390,14 +393,25 @@ export default function App() {
       style={styles.container}
       ref={(r) => setInspectRoot(r)}
       // Three-finger tap reveals the Disconnect bar while code is running.
-      // Claiming it in the capture phase means the root gets first refusal on
-      // every touch, but it only steals the gesture once a third finger is
-      // down — one- and two-finger touches go straight to the user's component,
-      // so normal taps, scrolls and pinches are unaffected.
-      onStartShouldSetResponderCapture={(e) =>
-        running && e.nativeEvent.touches.length >= 3
-      }
-      onResponderRelease={() => setChromeVisible((v) => !v)}
+      //
+      // This observes touches, it does not claim them. The earlier version used
+      // onStartShouldSetResponderCapture, which asks to *take over* the gesture
+      // — and a Touchable inside the user's component that already owns the
+      // first finger can decline to hand it over, so the gesture never fired.
+      // onTouchStart is a plain event handler rather than responder
+      // negotiation: it is dispatched to ancestors for touches anywhere in the
+      // subtree and returns nothing, so the responder chain is left alone.
+      onTouchStart={(e) => {
+        if (running && e.nativeEvent.touches.length >= 3 && gestureArmedRef.current) {
+          // Disarm until every finger lifts, or a fourth finger landing would
+          // fire this a second time and toggle straight back.
+          gestureArmedRef.current = false;
+          setChromeVisible((v) => !v);
+        }
+      }}
+      onTouchEnd={(e) => {
+        if (e.nativeEvent.touches.length === 0) gestureArmedRef.current = true;
+      }}
     >
       {showChrome && (
         <View style={styles.header}>
