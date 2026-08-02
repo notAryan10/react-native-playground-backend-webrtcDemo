@@ -176,13 +176,7 @@ export function inspectAt(xRatio: number, yRatio: number): Promise<InspectResult
     // add the matching WindowInsets left value if that ever shows up.
     if (typeof rootRef.measureInWindow === 'function') {
       rootRef.measureInWindow((wx: number, wy: number, w: number, h: number) => {
-        const lx = cx * (screen.width || w) - (wx || 0);
-        const ly = cy * (screen.height || h) - ((wy || 0) + topInset);
-        console.log('[InspectDbg]', 'ratio=', JSON.stringify({ cx: +cx.toFixed(4), cy: +cy.toFixed(4) }),
-          'inWindow=', JSON.stringify({ wx, wy, w, h }),
-          'screen=', JSON.stringify(screen), 'topInset=', topInset,
-          'point=', JSON.stringify({ lx: Math.round(lx), ly: Math.round(ly) }));
-        run(lx, ly);
+        run(cx * (screen.width || w) - (wx || 0), cy * (screen.height || h) - ((wy || 0) + topInset));
       });
     } else {
       run(cx * screen.width, cy * screen.height - topInset);
