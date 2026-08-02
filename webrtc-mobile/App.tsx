@@ -6,7 +6,7 @@ import {
 } from 'react-native-webrtc';
 import CodeRunner from './src/CodeRunner';
 import { Runtime } from './src/runtime';
-import { inspectAt, setInspectRoot, onInspectFrame, setCaptureView, measureCaptureRect } from './src/inspector';
+import { inspectAt, setInspectRoot, onInspectFrame } from './src/inspector';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -45,15 +45,6 @@ export default function App() {
   const [showScanner, setShowScanner] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const [inspectFrame, setInspectFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
-
-  // Tell viewers which part of the captured screen is the app preview, so they
-  // crop the stream to it. Re-sent on layout change and whenever a viewer joins.
-  const sendCaptureRect = async () => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const rect = await measureCaptureRect();
-    if (rect) ws.send(JSON.stringify({ type: 'capture-rect', rect }));
-  };
 
   useEffect(() => {
     onInspectFrame((frame) => setInspectFrame(frame && frame.width ? frame : null));
@@ -171,7 +162,6 @@ export default function App() {
         };
 
         await sendOffer();
-        sendCaptureRect();
       };
 
       ws.onmessage = async (event) => {
@@ -270,7 +260,6 @@ export default function App() {
                 const offer = await pcRef.current.createOffer();
                 await pcRef.current.setLocalDescription(offer);
                 ws.send(JSON.stringify({ type: 'offer', offer }));
-                sendCaptureRect();
               } catch (err) {
                 console.error('Failed to re-send offer:', err);
               }
@@ -324,11 +313,7 @@ export default function App() {
         <Text style={styles.status}>Status: {status}</Text>
       </View>
 
-      <View
-        style={styles.previewContainer}
-        ref={(r) => setCaptureView(r)}
-        onLayout={sendCaptureRect}
-      >
+      <View style={styles.previewContainer}>
         {(status === 'idle' || status === 'error') && !isProvisioning ? (
           <View style={styles.setupBox}>
             {userId ? (

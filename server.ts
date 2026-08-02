@@ -679,12 +679,6 @@ signalingWss.on("connection", (ws: WebSocket) => {
           });
           break;
 
-        case 'capture-rect':
-          // Device reported which slice of its screen is the app preview; viewers
-          // crop the stream to it.
-          broadcastToOthers(clientId, { type: 'capture-rect', rect: data.rect });
-          break;
-
         case 'inspect-result':
           // Device resolved the tap to a source location — relay back to web.
           clients.forEach((client, id) => {
