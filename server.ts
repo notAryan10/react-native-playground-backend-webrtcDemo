@@ -693,6 +693,18 @@ signalingWss.on("connection", (ws: WebSocket) => {
           });
           break;
 
+        case 'touch':
+          // Remote input: a web client clicked/dragged the streamed video.
+          // Normalized coords; the device injects them into its own window.
+          if (data.action === 'down' || data.action === 'move' || data.action === 'up' || data.action === 'cancel') {
+            clients.forEach((client, id) => {
+              if (id !== clientId && client.type === 'mobile' && client.ws.readyState === WebSocket.OPEN) {
+                client.ws.send(JSON.stringify({ type: 'touch', action: data.action, x: data.x, y: data.y }));
+              }
+            });
+          }
+          break;
+
         case 'inspect-result':
           // Device resolved the tap to a source location — relay back to web.
           clients.forEach((client, id) => {

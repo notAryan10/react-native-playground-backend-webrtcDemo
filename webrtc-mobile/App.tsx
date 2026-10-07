@@ -8,6 +8,7 @@ import {
 import CodeRunner from './src/CodeRunner';
 import { Runtime } from './src/runtime';
 import { inspectAt, setInspectRoot, onInspectFrame } from './src/inspector';
+import { injectTouch } from './modules/rnp-touch';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -318,6 +319,11 @@ export default function App() {
                 props: result.props,
               }));
             }
+          }
+
+          // Remote input from the Preview: a click/drag on the streamed video.
+          if (msg.type === 'touch') {
+            injectTouch(msg.action, msg.x, msg.y);
           }
 
           if (msg.type === 'module-bundle') {

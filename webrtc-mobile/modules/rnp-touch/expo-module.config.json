@@ -1,0 +1,7 @@
+{
+  "name": "rnp-touch",
+  "platforms": ["android"],
+  "android": {
+    "modules": ["expo.modules.rnptouch.RnpTouchModule"]
+  }
+}
