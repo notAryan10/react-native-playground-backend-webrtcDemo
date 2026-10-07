@@ -1,5 +1,4 @@
 import type React from 'react';
-import * as RefreshRuntime from 'react-refresh/runtime';
 import { requireModule } from './CodeRunner';
 
 // A persistent on-device module registry, Metro-like. Module factory functions
@@ -29,8 +28,14 @@ type Factory = (
 // here drive the live renderer. In a production build with no host Fast Refresh
 // we inject our own. Either way $RefreshReg$/$RefreshSig$ must always exist so
 // babel-instrumented modules don't throw a ReferenceError.
+//
+// Required lazily: in a release build react-refresh/runtime resolves to a stub
+// that throws on load ("should not be included in the production bundle"), and
+// a top-level import crashed the app at startup. Release builds take Tier 1.
+let RefreshRuntime: any = null;
 let fastRefreshReady = false;
 try {
+    RefreshRuntime = require('react-refresh/runtime');
     const g: any = global;
     if (typeof g.$RefreshReg$ !== 'function') {
         RefreshRuntime.injectIntoGlobalHook(g);
@@ -41,6 +46,11 @@ try {
 } catch (e) {
     console.warn('[HMR] Fast Refresh runtime unavailable — falling back to remount:', e);
     fastRefreshReady = false;
+}
+{
+    const g: any = global;
+    if (typeof g.$RefreshReg$ !== 'function') g.$RefreshReg$ = () => {};
+    if (typeof g.$RefreshSig$ !== 'function') g.$RefreshSig$ = () => (type: any) => type;
 }
 
 class ModuleRuntime {
