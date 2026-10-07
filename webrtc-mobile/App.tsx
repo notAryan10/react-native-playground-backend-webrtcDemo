@@ -51,6 +51,8 @@ export default function App() {
   const [orchestratorUrl, setOrchestratorUrl] = useState(getAutoUrl());
   const [isProvisioning, setIsProvisioning] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+  const [pairCode, setPairCode] = useState('');
+  const [pairError, setPairError] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const [inspectFrame, setInspectFrame] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [chromeVisible, setChromeVisible] = useState(false);
@@ -86,20 +88,26 @@ export default function App() {
     loadSettings();
   }, []);
 
-  const handleBarCodeScanned = ({ data }: { data: string }) => {
+  // Same JSON payload as the QR code; pasted when there is no camera to scan
+  // with (an emulator on the same machine as the browser).
+  const pair = (data: string) => {
     try {
       const config = JSON.parse(data);
       if (config.url && config.id) {
         setOrchestratorUrl(config.url);
         setUserId(config.id);
         setShowScanner(false);
-        // Start connection automatically after scan
+        setPairCode('');
         setTimeout(() => startConnection(config.url, config.id), 500);
+        return true;
       }
     } catch (e) {
-      console.error('Invalid QR code:', e);
+      console.error('Invalid pairing code:', e);
     }
+    return false;
   };
+
+  const handleBarCodeScanned = ({ data }: { data: string }) => { pair(data); };
 
   const startConnection = async (url: string, id: string) => {
     try {
@@ -381,6 +389,18 @@ export default function App() {
               </View>
             ) : null}
             <Button title="Scan QR to Pair" onPress={() => setShowScanner(true)} color="#007aff" />
+            <Text style={styles.orText}>— OR paste the pairing code —</Text>
+            <TextInput
+              style={styles.pairInput}
+              value={pairCode}
+              onChangeText={(t) => { setPairCode(t); setPairError(false); }}
+              placeholder='{"url":"…","id":"…"}'
+              placeholderTextColor="#888"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {pairError && <Text style={styles.pairError}>That is not a valid pairing code</Text>}
+            <Button title="Pair" onPress={() => setPairError(!pair(pairCode.trim()))} disabled={!pairCode.trim()} />
           </View>
         ) : null}
 
@@ -500,6 +520,22 @@ const styles = StyleSheet.create({
     color: '#333',
     marginVertical: 15,
     fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  pairInput: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 6,
+    padding: 10,
+    marginBottom: 10,
+    color: '#000',
+    fontSize: 12,
+  },
+  pairError: {
+    color: '#d00',
+    fontSize: 12,
+    marginBottom: 10,
+    textAlign: 'center',
   },
   scannerOverlay: {
     position: 'absolute',
