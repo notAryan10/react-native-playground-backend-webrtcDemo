@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { View, Text, Button, StyleSheet, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, Button, StyleSheet, TextInput, ActivityIndicator, Linking } from 'react-native';
 import {
   RTCPeerConnection,
   mediaDevices,
@@ -108,6 +108,37 @@ export default function App() {
   };
 
   const handleBarCodeScanned = ({ data }: { data: string }) => { pair(data); };
+
+  // rnp://pair?token=…&server=… from the RNP Device helper. The token is
+  // single-use and short-lived; trade it for the workspace id, then pair as if
+  // the QR had been scanned.
+  const pairFromLink = async (link: string | null) => {
+    if (!link || !link.startsWith('rnp://pair')) return;
+    const q: Record<string, string> = {};
+    for (const kv of (link.split('?')[1] || '').split('&')) {
+      const [k, v = ''] = kv.split('=');
+      if (k) q[k] = decodeURIComponent(v);
+    }
+    if (!q.token || !q.server) return;
+    try {
+      const res = await fetch(`${q.server}/pair/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: q.token }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.id || !pair(JSON.stringify({ url: q.server, id: data.id }))) setPairError(true);
+    } catch {
+      setPairError(true);
+    }
+  };
+
+  useEffect(() => {
+    Linking.getInitialURL().then(pairFromLink);
+    const sub = Linking.addEventListener('url', (e) => { void pairFromLink(e.url); });
+    return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const startConnection = async (url: string, id: string) => {
     try {
