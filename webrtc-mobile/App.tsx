@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { View, Text, Button, StyleSheet, TextInput, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, Button, StyleSheet, TextInput, ActivityIndicator, Linking, KeyboardAvoidingView, ScrollView, Platform, Dimensions, PixelRatio } from 'react-native';
 import {
   RTCPeerConnection,
   mediaDevices,
@@ -36,7 +36,10 @@ const ICE_SERVERS = [
 ];
 
 const PREVIEW_MAX_FPS = 20;
-const PREVIEW_SCALE_DOWN = 2;
+// Downscale only screens wider than this many physical px. A fixed /2 left a
+// small emulator display (320 px wide) at 160 px and unreadable in Preview.
+const PREVIEW_MAX_WIDTH = 720;
+const PREVIEW_SCALE_DOWN = Math.max(1, (Dimensions.get('screen').width * PixelRatio.get()) / PREVIEW_MAX_WIDTH);
 
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -408,7 +411,11 @@ export default function App() {
 
       <View style={styles.previewContainer}>
         {(status === 'idle' || status === 'error') && !isProvisioning ? (
-          <View style={styles.setupBox}>
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+          <ScrollView contentContainerStyle={styles.setupBox} keyboardShouldPersistTaps="handled">
             {userId ? (
               <View style={styles.pairedBox}>
                 <Text style={styles.pairedLabel}>Last Paired Workspace:</Text>
@@ -432,7 +439,8 @@ export default function App() {
             />
             {pairError && <Text style={styles.pairError}>That is not a valid pairing code</Text>}
             <Button title="Pair" onPress={() => setPairError(!pair(pairCode.trim()))} disabled={!pairCode.trim()} />
-          </View>
+          </ScrollView>
+          </KeyboardAvoidingView>
         ) : null}
 
         {isProvisioning && (
@@ -518,7 +526,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   setupBox: {
-    flex: 1,
+    flexGrow: 1,
     padding: 30,
     justifyContent: 'center',
   },
@@ -559,7 +567,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     padding: 10,
     marginBottom: 10,
-    color: '#000',
+    color: '#fff',
     fontSize: 12,
   },
   pairError: {
