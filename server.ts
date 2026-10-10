@@ -123,12 +123,22 @@ function makeSourceTagPlugin(filePath: string) {
         if (already) return;
         const start = p.node.loc && p.node.loc.start;
         if (!start) return;
+        const src = `${filePath}:${start.line}:${start.column}`;
         p.node.attributes.unshift(
-          t.jsxAttribute(
-            t.jsxIdentifier('__rnpSrc'),
-            t.stringLiteral(`${filePath}:${start.line}:${start.column}`)
-          )
+          t.jsxAttribute(t.jsxIdentifier('__rnpSrc'), t.stringLiteral(src))
         );
+        // Release builds have no React DevTools hook, so the device cannot walk
+        // fibers to __rnpSrc. nativeID survives onto the native view, where a
+        // native hit-test can read it. Appended last so a {...props} spread
+        // earlier in the element cannot replace it; an explicit nativeID wins.
+        const hasNativeId = attrs.some(
+          (a: any) => a.type === 'JSXAttribute' && a.name && a.name.name === 'nativeID'
+        );
+        if (!hasNativeId) {
+          p.node.attributes.push(
+            t.jsxAttribute(t.jsxIdentifier('nativeID'), t.stringLiteral(`rnp:${src}`))
+          );
+        }
       },
     },
   });

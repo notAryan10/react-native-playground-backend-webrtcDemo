@@ -1,4 +1,5 @@
 import { findNodeHandle, Dimensions, Platform, StatusBar } from 'react-native';
+import { nativeHitTest } from '../modules/rnp-touch';
 
 // Tap-to-source inspector. A web client taps the streamed device video and
 // sends a normalized [0,1] coordinate; we hit-test the on-device view tree at
@@ -91,6 +92,7 @@ function sanitizeProps(props: any): Record<string, any> {
   if (!props) return out;
   for (const k of Object.keys(props)) {
     if (k === '__rnpSrc' || k === 'children') continue;
+    if (k === 'nativeID' && typeof props[k] === 'string' && props[k].startsWith('rnp:')) continue;
     const v = props[k];
     const tv = typeof v;
     if (tv === 'function') out[k] = 'fn ' + (v.name || 'anonymous');
@@ -107,9 +109,37 @@ function sanitizeProps(props: any): Record<string, any> {
 
 const EMPTY: InspectResult = { source: null, componentName: null, props: null, frame: null };
 
+// Host view class -> the RN component a user would recognize.
+const VIEW_CLASS_NAMES: Record<string, string> = {
+  ReactTextView: 'Text',
+  ReactViewGroup: 'View',
+  ReactImageView: 'Image',
+  ReactEditText: 'TextInput',
+  ReactScrollView: 'ScrollView',
+  ReactHorizontalScrollView: 'ScrollView',
+  ReactSwitch: 'Switch',
+};
+
+// Release builds: no DevTools hook, so no fiber walk. The native module finds
+// the view under the point by the nativeID the bundler stamped. Source and a
+// component name only; props are not reachable from the native view.
+async function inspectAtNative(xRatio: number, yRatio: number): Promise<InspectResult> {
+  const hit = await nativeHitTest(xRatio, yRatio);
+  if (!hit) return EMPTY;
+  const frame = hit.frame || null;
+  if (frameListener) frameListener(frame);
+  return {
+    source: hit.nativeID,
+    componentName: VIEW_CLASS_NAMES[hit.viewClass] || hit.viewClass,
+    props: null,
+    frame,
+  };
+}
+
 export function inspectAt(xRatio: number, yRatio: number): Promise<InspectResult> {
+  if (!getInspectorDataForViewAtPoint) return inspectAtNative(xRatio, yRatio);
   return new Promise((resolve) => {
-    if (!getInspectorDataForViewAtPoint || !rootRef) return resolve(EMPTY);
+    if (!rootRef) return resolve(EMPTY);
 
     const run = (locationX: number, locationY: number) => {
       try {
