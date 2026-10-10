@@ -45,6 +45,7 @@ const PREVIEW_SCALE_DOWN = Math.max(1, (Dimensions.get('screen').width * PixelRa
 export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(false);
   const [status, setStatus] = useState('idle');
@@ -144,7 +145,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startConnection = async (url: string, id: string) => {
+  // isRetry: an automatic reconnect after the socket dropped; failures retry
+  // quietly instead of alerting.
+  const startConnection = async (url: string, id: string, isRetry = false) => {
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
     try {
       await AsyncStorage.setItem('orchestrator-url', url);
       await AsyncStorage.setItem('user-id', id);
@@ -354,12 +359,24 @@ export default function App() {
         }
       };
 
-      ws.onerror = () => setStatus('error');
-      ws.onclose = () => setStatus('closed');
+      // A replaced socket's late close must not clobber the live connection's
+      // status (re-pairing closes the old one). A drop of the live socket
+      // reconnects; Disconnect clears wsRef first, so it does not.
+      ws.onerror = () => { if (wsRef.current === ws) setStatus('error'); };
+      ws.onclose = () => {
+        if (wsRef.current !== ws) return;
+        setStatus('closed');
+        reconnectTimerRef.current = setTimeout(() => startConnection(url, id, true), 3000);
+      };
     } catch (e: any) {
+      setIsProvisioning(false);
+      if (isRetry) {
+        setStatus('closed');
+        reconnectTimerRef.current = setTimeout(() => startConnection(url, id, true), 5000);
+        return;
+      }
       alert('Connection failed: ' + e.message);
       setStatus('error');
-      setIsProvisioning(false);
     }
   };
 
@@ -475,7 +492,11 @@ export default function App() {
       <View style={styles.controls}>
         {status !== 'idle' && status !== 'error' && (
            <Button title="Disconnect" onPress={() => {
-             wsRef.current?.close();
+             if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+             reconnectTimerRef.current = null;
+             const ws = wsRef.current;
+             wsRef.current = null;
+             ws?.close();
              stopCapture();
              setChromeVisible(false);
              setStatus('idle');
