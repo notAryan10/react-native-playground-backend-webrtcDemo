@@ -67,8 +67,12 @@ class RnpTouchModule : Module() {
         val (view, nativeId) = hit
         val loc = IntArray(2)
         view.getLocationOnScreen(loc)
+        // Frame relative to the content view, which is where the app's root
+        // (and its highlight overlay) starts. The decor view also covers the
+        // status bar, which drew the highlight one status-bar height too low.
+        val content = activity.findViewById<View>(android.R.id.content) ?: decor
         val origin = IntArray(2)
-        decor.getLocationOnScreen(origin)
+        content.getLocationOnScreen(origin)
         val d = metrics.density
         mapOf(
           "nativeID" to nativeId,
