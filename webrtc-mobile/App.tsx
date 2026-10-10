@@ -46,6 +46,9 @@ export default function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped per startConnection; an attempt that finishes after a newer one
+  // started is discarded, so overlapping attempts never leave two sockets.
+  const connGenRef = useRef(0);
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef(false);
   const [status, setStatus] = useState('idle');
@@ -150,6 +153,7 @@ export default function App() {
   const startConnection = async (url: string, id: string, isRetry = false) => {
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     reconnectTimerRef.current = null;
+    const gen = ++connGenRef.current;
     try {
       await AsyncStorage.setItem('orchestrator-url', url);
       await AsyncStorage.setItem('user-id', id);
@@ -170,6 +174,7 @@ export default function App() {
 
       const SIGNALING_URL = data.url;
       setIsProvisioning(false);
+      if (gen !== connGenRef.current) return; // superseded while provisioning
 
       wsRef.current?.close();
 
@@ -363,13 +368,19 @@ export default function App() {
       // status (re-pairing closes the old one). A drop of the live socket
       // reconnects; Disconnect clears wsRef first, so it does not.
       ws.onerror = () => { if (wsRef.current === ws) setStatus('error'); };
+      // RN can deliver both a failed and a closed event for one drop; clearing
+      // wsRef on the first makes the second a no-op (it scheduled a duplicate
+      // reconnect, leaving two live sockets and double-delivered messages).
       ws.onclose = () => {
         if (wsRef.current !== ws) return;
+        wsRef.current = null;
         setStatus('closed');
+        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = setTimeout(() => startConnection(url, id, true), 3000);
       };
     } catch (e: any) {
       setIsProvisioning(false);
+      if (gen !== connGenRef.current) return; // a newer attempt owns the retry
       if (isRetry) {
         setStatus('closed');
         reconnectTimerRef.current = setTimeout(() => startConnection(url, id, true), 5000);
@@ -494,6 +505,7 @@ export default function App() {
            <Button title="Disconnect" onPress={() => {
              if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
              reconnectTimerRef.current = null;
+             connGenRef.current++; // abandon any attempt still in flight
              const ws = wsRef.current;
              wsRef.current = null;
              ws?.close();
