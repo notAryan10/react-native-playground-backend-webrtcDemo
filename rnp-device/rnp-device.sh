@@ -25,6 +25,9 @@ EMU="$SDK/emulator/emulator"
 ALLOWED_HOSTS="${RNP_ALLOWED_HOSTS:-trycloudflare.com}"
 APK_CACHE="$HOME/.rnp-device/rnp.apk"
 [ -n "${ANDROID_AVD_HOME:-}" ] && export ANDROID_AVD_HOME
+# The emulator finds system images under ANDROID_SDK_ROOT; without it, a
+# symlinked emulator binary guesses the SDK from its own real path.
+export ANDROID_SDK_ROOT="$SDK" ANDROID_HOME="$SDK"
 
 notify() {
     echo "$1"
